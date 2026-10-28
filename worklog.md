@@ -104,3 +104,31 @@ Work Log:
 
 Stage Summary:
 - Proxy engine now boots/retries across Safari/iOS, storage-blocked Chromebooks, ad-blocker script failures and stale SWs; wisp relay is supervised; error screen is diagnosable and actionable
+
+---
+Task ID: 5
+Agent: main (Z.ai)
+Task: Fix "Failed to execute 'transaction' on 'IDBDatabase': One of the specified object stores was not found."
+
+Work Log:
+- Root cause (2 colliding code paths in vendored Scramjet 1.1.0):
+  1. SW-side ScramjetServiceWorker opens $scramjet at v1 WITHOUT an upgrade handler — if it wakes before the controller ever initialized (stale registration survived a storage clear), it creates an EMPTY v1 database
+  2. Controller-side openIDB opens $scramjet at v1 WITH an upgrade handler — but onupgradeneeded only fires on version CHANGE, so against the empty v1 DB it never runs, the 5 stores (config/cookies/redirectTrackers/referrerPolicies/publicSuffixList) are never created, and every db.transaction(store) (idb wrapper get/put) throws NotFoundError — permanently, across reloads
+- Fix 1 — src/lib/scramjet.ts: ensureScramjetDB() pre-flight in bootProxy stage 1.5:
+  - indexedDB.databases() fast-path (skip if $scramjet absent), versionless inspect open (never upgrades/blocks), delete when version!=1 or any store missing (version bump is NOT an option — engine insists on v1)
+  - blocked-delete recovery (stale SW holds connections): unregister SW + one-time guarded reload (sessionStorage flag) + 8s in-page wait
+- Fix 2 — public/sw.js hardening:
+  - monkey-patched indexedDB.open BEFORE new ScramjetServiceWorker(): any SW-side open("$scramjet",1) gets the full-schema upgrade injected → the empty-DB race can never recur (verified no-op on healthy DBs, foreign DBs untouched)
+  - non-scramjet requests (pathname not /scramjet/* and not the wasm file) bypass loadConfig/scramjet entirely → a broken engine DB can never 502 the site's own assets (old code ran loadConfig on EVERY fetch)
+- Verification (agent-browser, full E2E on dev stack):
+  - Reproduced the user's exact error character-for-character: closed controller conn → deleted healthy DB → recreated EMPTY v1 → db.transaction('config') threw "Failed to execute 'transaction' on 'IDBDatabase': One of the specified object stores was not found."
+  - Loaded app → pre-flight healed automatically → DB recreated with all 5 stores → engine ready → SW active
+  - Topology confirmed: Caddy :81 gateway = production-equivalent path (XTransformPort→3001 wisp relay); localhost:3000 bypasses it (308) — proxy tests must run via :81
+  - epoxy (default): example.com renders real live content through /scramjet/ frame
+  - libcurl: wikipedia.org renders real live content (title, search box, full portal text)
+  - agent-browser errors: none; console: only benign Next dev-overlay hydration warnings
+  - parse checks: TS compiler API (scramjet.ts OK), node --check (sw.js OK), node simulation of the SW patch (5 stores created on race, foreign DBs untouched)
+- Note: full-project tsc not runnable in-sandbox (4GB box, OOM at fork with dev server + browser running); build config untouched, changes are 1 client lib + 1 public script
+
+Stage Summary:
+- $scramjet IndexedDB is now self-healing at boot and race-proof at the SW layer; both transports serve real pages end-to-end through the gateway topology

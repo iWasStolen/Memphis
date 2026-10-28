@@ -160,6 +160,116 @@ export function resetTransport(): void {
   muxConn = null;
 }
 
+/* ---------------- $scramjet IndexedDB self-heal ---------------- */
+
+/* The vendored Scramjet opens its database at version 1 and only creates
+   object stores inside `onupgradeneeded`. A database that already exists at
+   version 1 with a DIFFERENT store set (left behind by an earlier build, or
+   created empty by the service worker winning a first-visit race) therefore
+   never gets repaired — every db.transaction(...) then throws
+   "Failed to execute 'transaction' on 'IDBDatabase': One of the specified
+   object stores was not found."
+
+   Repair = delete the broken database; the controller recreates it with the
+   full schema moments later. (Bumping the version instead would break the
+   engine, which insists on opening version 1.) */
+
+const SCRAMJET_DB_NAME = "$scramjet";
+const SCRAMJET_REQUIRED_STORES = [
+  "config",
+  "cookies",
+  "redirectTrackers",
+  "referrerPolicies",
+  "publicSuffixList",
+];
+const IDB_REPAIR_RELOAD_FLAG = "memphis-idb-repair";
+
+interface DBInfo {
+  version: number;
+  stores: string[];
+}
+
+/** Inspect the existing $scramjet database without changing its version. */
+function inspectScramjetDB(): Promise<DBInfo | null> {
+  return new Promise((resolve) => {
+    /* open WITHOUT a version: never triggers our own upgrade, never blocks */
+    const req = indexedDB.open(SCRAMJET_DB_NAME);
+    req.onsuccess = () => {
+      const db = req.result;
+      const info: DBInfo = { version: db.version, stores: [...db.objectStoreNames] };
+      db.close(); /* release before any later deleteDatabase */
+      resolve(info);
+    };
+    req.onerror = () => resolve(null);
+  });
+}
+
+/** Delete $scramjet, recovering from a stale service worker holding it
+    open (deletion is "blocked" until every connection closes). */
+function deleteScramjetDB(): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (!settled) {
+        settled = true;
+        resolve();
+      }
+    };
+    const req = indexedDB.deleteDatabase(SCRAMJET_DB_NAME);
+    req.onsuccess = finish;
+    req.onerror = finish;
+    req.onblocked = async () => {
+      /* usually the old service worker — drop its registration so the
+         browser terminates it and releases the connection */
+      try {
+        const reg = await navigator.serviceWorker?.getRegistration();
+        await reg?.unregister();
+      } catch {
+        /* registration lookup blocked — the wait below is the fallback */
+      }
+      /* give the idle worker time to die, then resolve so boot continues
+         (a still-queued delete completes on its own once it lets go) */
+      setTimeout(finish, 8000);
+      /* one-time reload: the next boot retries the deletion with the
+         service worker out of the way (guarded → cannot loop) */
+      try {
+        if (!sessionStorage.getItem(IDB_REPAIR_RELOAD_FLAG)) {
+          sessionStorage.setItem(IDB_REPAIR_RELOAD_FLAG, "1");
+          setTimeout(() => location.reload(), 200);
+        }
+      } catch {
+        /* storage blocked — in-page wait is the only recovery */
+      }
+    };
+  });
+}
+
+/** Make sure the $scramjet database is either absent or healthy (version 1
+    with every required store) before the engine opens it. */
+export async function ensureScramjetDB(): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+
+  /* fast path — nothing to heal if the database doesn't exist yet */
+  try {
+    if (typeof indexedDB.databases === "function") {
+      const dbs = await indexedDB.databases();
+      if (!dbs.some((d) => d.name === SCRAMJET_DB_NAME)) return;
+    }
+  } catch {
+    /* databases() unsupported or blocked — fall through to inspection */
+  }
+
+  const info = await inspectScramjetDB();
+  if (!info) return; /* unreadable — let the engine surface a proper error */
+
+  const missing = SCRAMJET_REQUIRED_STORES.filter((s) => !info.stores.includes(s));
+  if (info.version === 1 && missing.length === 0) return; /* healthy */
+
+  /* broken schema (or unexpected version) — delete and let the controller
+     recreate it with the complete store set */
+  await deleteScramjetDB();
+}
+
 /* ---------------- diagnostics ---------------- */
 
 export interface ProxyDiagnostics {
@@ -266,6 +376,20 @@ export function bootProxy(): Promise<ProxyHandle> {
       );
     }
 
+    /* stage 1.5 — self-heal the engine's IndexedDB. A $scramjet database
+       left at version 1 with missing object stores (earlier build or an
+       SW first-visit race) can never be upgraded by the engine itself;
+       delete it so the controller recreates the full schema */
+    try {
+      await ensureScramjetDB();
+    } catch (err) {
+      throw new Error(
+        "A leftover proxy database from an earlier visit could not be cleared. " +
+        "Clear this site's data in your browser settings and try again. " +
+        `(${err instanceof Error ? err.message : String(err)})`
+      );
+    }
+
     /* stage 2 — construct + init the controller FIRST (official demo order):
        it creates the $scramjet IndexedDB with the full schema so the
        service worker finds a complete database */
@@ -284,6 +408,7 @@ export function bootProxy(): Promise<ProxyHandle> {
       throw new Error(
         "The Scramjet engine could not initialize its local database. " +
         "Private-browsing restrictions or blocked site data can cause this. " +
+        "Clearing this site's data in your browser settings usually fixes it. " +
         `(${err instanceof Error ? err.message : String(err)})`
       );
     }
