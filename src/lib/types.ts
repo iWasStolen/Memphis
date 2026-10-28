@@ -13,15 +13,19 @@ export type ViewId =
   | "browse";
 
 export const VIEWS: { id: ViewId; label: string; desc: string }[] = [
-  { id: "home", label: "Home", desc: "Study portal" },
-  { id: "play", label: "Play", desc: "Games library" },
-  { id: "apps", label: "Apps", desc: "Toolbox" },
+  { id: "home", label: "Home", desc: "Dashboard" },
+  { id: "play", label: "Play", desc: "2700+ games" },
+  { id: "apps", label: "Apps", desc: "50 web apps" },
   { id: "chat", label: "Chat", desc: "Community" },
-  { id: "ai", label: "AI", desc: "AI tutor" },
-  { id: "listen", label: "Listen", desc: "Music" },
-  { id: "watch", label: "Watch", desc: "Video" },
-  { id: "browse", label: "Browse", desc: "Web browser" },
+  { id: "ai", label: "AI", desc: "GLM chat — free, unlimited" },
+  { id: "listen", label: "Listen", desc: "Spotify" },
+  { id: "watch", label: "Watch", desc: "YouTube" },
+  { id: "browse", label: "Browse", desc: "Scramjet web proxy" },
 ];
+
+/* ---------------- Proxy ---------------- */
+
+export type ProxyTransport = "epoxy" | "libcurl";
 
 /* ---------------- Settings ---------------- */
 
@@ -112,7 +116,8 @@ export interface AppSettings {
   closeProtection: boolean;
   skipLoading: boolean;
   showChatFab: boolean;
-  proxyBase: string;
+  transport: ProxyTransport;
+  searchEngine: "duckduckgo" | "google" | "bing" | "brave";
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -131,8 +136,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
   closeProtection: false,
   skipLoading: false,
   showChatFab: true,
-  proxyBase: "",
+  transport: "epoxy",
+  searchEngine: "duckduckgo",
 };
+
+export const SEARCH_ENGINES: { id: AppSettings["searchEngine"]; label: string; url: string }[] = [
+  { id: "duckduckgo", label: "DuckDuckGo", url: "https://duckduckgo.com/?q=%s" },
+  { id: "google", label: "Google", url: "https://www.google.com/search?q=%s" },
+  { id: "bing", label: "Bing", url: "https://www.bing.com/search?q=%s" },
+  { id: "brave", label: "Brave", url: "https://search.brave.com/search?q=%s" },
+];
 
 /* ---------------- Auth / user ---------------- */
 
@@ -155,46 +168,24 @@ export interface SessionUser {
 
 /* ---------------- Games ---------------- */
 
-export type GameCategory = "arcade" | "puzzle" | "classic" | "action" | "casual";
+export type GameCategory = "arcade" | "puzzle" | "classic" | "action" | "casual" | string;
 
+/** A game as served by /api/games (catalog + builtins merged). */
 export interface GameDef {
   id: string;
   name: string;
-  category: GameCategory;
+  desc: string;
+  /** embed url for external games, empty for builtins */
+  url?: string;
+  category: string;
+  tags?: string[];
+  thumb?: string;
+  width?: number;
+  height?: number;
+  /** true when rendered by the built-in player components */
   builtin?: boolean;
-  embedUrl?: string;
-  external?: boolean;
   hasScore?: boolean;
   scoreLabel?: string;
-  desc: string;
-}
-
-/* ---------------- Music ---------------- */
-
-export interface TrackDef {
-  id: string;
-  title: string;
-  artist: string;
-  genre: string;
-  bpm: number;
-  dur: number; // seconds
-  seed: number;
-  style: "lofi" | "chiptune" | "ambient" | "synthwave" | "house" | "jazz" | "trap" | "rock";
-}
-
-/* ---------------- Watch ---------------- */
-
-export interface WatchItemDef {
-  id: string;
-  title: string;
-  year?: string;
-  meta: string;
-  desc: string;
-  kind: "movie" | "anime" | "youtube";
-  source: string;
-  sourceUrl: string;
-  duration?: string;
-  rating?: string;
 }
 
 /* ---------------- Chat ---------------- */

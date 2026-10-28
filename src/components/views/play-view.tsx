@@ -1,372 +1,356 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { GAMES, GAME_CATEGORIES } from "@/lib/games";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GameDef } from "@/lib/types";
-import { lsGet, lsSet, api, useUI } from "@/lib/store";
+import { lsGet, lsSet } from "@/lib/store";
 import { GamePlayer } from "@/components/games/player";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Search, Star, Trophy, ChevronLeft, ChevronRight, BookOpen } from "lucide-react";
+import {
+  Search,
+  Star,
+  Clock,
+  Gamepad2,
+  Loader2,
+  Server,
+  ArrowDownAZ,
+  ArrowUpAZ,
+  ListFilter,
+  Sparkles,
+} from "lucide-react";
 
-const PAGE_SIZE = 12;
+const FAV_KEY = "memphis-fav-games";
+const RECENT_KEY = "memphis-recent-games";
+const PAGE_SIZE = 48;
 
-interface ScoreRow {
-  id: string;
-  name: string;
-  score: number;
-  createdAt: string;
-}
-interface PlayerRow {
-  name: string;
+interface ApiResp {
+  ok: boolean;
   total: number;
-  games: number;
+  page: number;
+  per: number;
+  categories: { slug: string; label: string; count: number }[];
+  games: GameDef[];
 }
 
-function LeaderboardPanel() {
-  const [tab, setTab] = useState<"players" | "2048" | "snake" | "tetris" | "flappy">("players");
-  const [players, setPlayers] = useState<PlayerRow[] | null>(null);
-  const [scores, setScores] = useState<ScoreRow[] | null>(null);
-  const [loading, setLoading] = useState(false);
+type Filter = "all" | "favorites" | "recent" | "builtin";
 
+export default function PlayView() {
+  const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
+  const [cat, setCat] = useState("all");
+  const [filter, setFilter] = useState<Filter>("all");
+  const [sort, setSort] = useState<"default" | "az" | "za">("default");
+  const [categories, setCategories] = useState<ApiResp["categories"]>([]);
+  const [games, setGames] = useState<GameDef[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [playing, setPlaying] = useState<GameDef | null>(null);
+  const [favVersion, setFavVersion] = useState(0); // bump to refresh fav filter
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const firstLoad = useRef(true);
+
+  const favs = useMemo(() => lsGet<string[]>(FAV_KEY, []), [favVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  const recents = useMemo(() => lsGet<string[]>(RECENT_KEY, []), [playing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* debounce the search box */
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q.trim()), 250);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const buildUrl = useCallback(
+    (pageNo: number) => {
+      const params = new URLSearchParams();
+      if (debouncedQ) params.set("q", debouncedQ);
+      if (cat !== "all") params.set("cat", cat);
+      if (filter === "builtin") params.set("ids", "2048,snake,tetris,minesweeper,breakout,flappy,pong,memory,tictactoe,simon,asteroids,clicker,trex,clumsy,astray,2048-classic,hextris,hexgl");
+      if (filter === "favorites" && favs.length) params.set("ids", favs.join(","));
+      if (filter === "recent" && recents.length) params.set("ids", recents.join(","));
+      if (sort !== "default") params.set("sort", sort);
+      params.set("page", String(pageNo));
+      params.set("per", String(PAGE_SIZE));
+      return `/api/games?${params.toString()}`;
+    },
+    [debouncedQ, cat, filter, sort, favs, recents]
+  );
+
+  /* (re)load the first page when the query changes */
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    (async () => {
-      if (tab === "players") {
-        setScores(null);
-        const r = await api<{ players: PlayerRow[] }>(
-          "/api/games/scores?mode=players"
-        );
-        if (!cancelled) setPlayers(r.ok ? r.data.players : []);
-      } else {
-        setPlayers(null);
-        const r = await api<{ scores: ScoreRow[] }>(
-          `/api/games/scores?game=${tab}`
-        );
-        if (!cancelled) setScores(r.ok ? r.data.scores : []);
-      }
-      if (!cancelled) setLoading(false);
-    })();
+    fetch(buildUrl(1))
+      .then((r) => r.json())
+      .then((data: ApiResp) => {
+        if (cancelled) return;
+        setGames(data.games || []);
+        setTotal(data.total || 0);
+        setCategories(data.categories || []);
+        setPage(1);
+        setLoading(false);
+        if (firstLoad.current) firstLoad.current = false;
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
-  }, [tab]);
+  }, [buildUrl]);
 
-  const tabs: { id: typeof tab; label: string }[] = [
-    { id: "players", label: "Top Players" },
-    { id: "2048", label: "2048" },
-    { id: "snake", label: "Snake" },
-    { id: "tetris", label: "Tetris" },
-    { id: "flappy", label: "Flappy" },
+  const loadMore = useCallback(async () => {
+    if (loadingMore || games.length >= total) return;
+    setLoadingMore(true);
+    try {
+      const r = await fetch(buildUrl(page + 1));
+      const data: ApiResp = await r.json();
+      setGames((cur) => [...cur, ...(data.games || [])]);
+      setPage((p) => p + 1);
+      setTotal(data.total || total);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [buildUrl, loadingMore, page, total, games.length]);
+
+  /* infinite scroll */
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !loading && !loadingMore && games.length > 0 && games.length < total) {
+          void loadMore();
+        }
+      },
+      { rootMargin: "600px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [loadMore, loading, loadingMore, games.length, total]);
+
+  const openGame = (g: GameDef) => {
+    const recent = lsGet<string[]>(RECENT_KEY, []).filter((x) => x !== g.id);
+    recent.unshift(g.id);
+    lsSet(RECENT_KEY, recent.slice(0, 60));
+    setPlaying(g);
+  };
+
+  const closeGame = () => {
+    setPlaying(null);
+    setFavVersion((v) => v + 1);
+  };
+
+  const chips: { id: Filter | string; label: string; icon?: React.ReactNode }[] = [
+    { id: "all", label: "All" },
+    { id: "favorites", label: `Favorites${favs.length ? ` (${favs.length})` : ""}`, icon: <Star className="size-3" /> },
+    { id: "recent", label: "Recent", icon: <Clock className="size-3" /> },
+    { id: "builtin", label: "Built-in", icon: <Gamepad2 className="size-3" /> },
   ];
 
   return (
-    <section
-      aria-label="Leaderboard"
-      className="border border-[#1a1a1a] rounded-lg bg-[#080808]"
-    >
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-[#141414]">
-        <Trophy className="size-4 text-white" />
-        <h2 className="text-sm font-semibold text-white">Leaderboard</h2>
-      </div>
-      <div className="flex gap-1 px-3 pt-3 overflow-x-auto">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`px-2.5 py-1 rounded text-[11px] whitespace-nowrap transition-colors ${
-              tab === t.id
-                ? "bg-white text-black"
-                : "text-[#8f8f8f] hover:text-white"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      <div className="p-3 min-h-[120px]">
-        {loading ? (
-          <div className="space-y-2" aria-busy="true">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="h-6 shimmer rounded" />
-            ))}
-          </div>
-        ) : tab === "players" ? (
-          players && players.length > 0 ? (
-            <ol className="space-y-1">
-              {players.map((p, i) => (
-                <li
-                  key={p.name}
-                  className="flex items-center justify-between text-[13px] px-2 py-1.5 rounded hover:bg-[#0e0e0e]"
-                >
-                  <span className="text-[#c9c9c9] flex items-center gap-2 min-w-0">
-                    <span className="font-mono text-[10px] text-[#555] w-5">
-                      {String(i + 1).padStart(2, "0")}
-                    </span>
-                    <span className="truncate">{p.name}</span>
-                  </span>
-                  <span className="font-mono text-xs text-white">
-                    {p.total.toLocaleString()}{" "}
-                    <span className="text-[#555]">pts · {p.games} runs</span>
-                  </span>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="text-xs text-[#666] py-4 text-center">
-              No scores yet — be the first on the board.
-            </p>
-          )
-        ) : scores && scores.length > 0 ? (
-          <ol className="space-y-1">
-            {scores.map((s, i) => (
-              <li
-                key={s.id}
-                className="flex items-center justify-between text-[13px] px-2 py-1.5 rounded hover:bg-[#0e0e0e]"
-              >
-                <span className="text-[#c9c9c9] flex items-center gap-2 min-w-0">
-                  <span className="font-mono text-[10px] text-[#555] w-5">
-                    {String(i + 1).padStart(2, "0")}
-                  </span>
-                  <span className="truncate">{s.name}</span>
-                </span>
-                <span className="font-mono text-xs text-white">
-                  {s.score.toLocaleString()}
-                </span>
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="text-xs text-[#666] py-4 text-center">
-            No scores for this game yet.
-          </p>
-        )}
-      </div>
-    </section>
-  );
-}
-
-export default function PlayView() {
-  const { setReportTarget, openModal } = useUI();
-  const [filter, setFilter] = useState<string>("all");
-  const [query, setQuery] = useState("");
-  const [page, setPage] = useState(0);
-  const [playing, setPlaying] = useState<GameDef | null>(null);
-  const [favs, setFavs] = useState<string[]>([]);
-  const [recent, setRecent] = useState<string[]>([]);
-
-  useEffect(() => {
-    setFavs(lsGet<string[]>("memphis-fav-games", []));
-    setRecent(lsGet<string[]>("memphis-recent-games", []));
-  }, []);
-
-  useEffect(() => {
-    setPage(0);
-  }, [filter, query]);
-
-  useEffect(() => {
-    if (playing) {
-      setRecent(lsGet<string[]>("memphis-recent-games", []));
-      setFavs(lsGet<string[]>("memphis-fav-games", []));
-    }
-  }, [playing]);
-
-  const filtered = useMemo(() => {
-    let list = [...GAMES];
-    if (filter === "favorites") list = list.filter((g) => favs.includes(g.id));
-    else if (filter === "recent") list = recent.map((id) => list.find((g) => g.id === id)).filter(Boolean as unknown as (v: GameDef | undefined) => v is GameDef);
-    else if (filter !== "all") list = list.filter((g) => g.category === filter);
-    if (query.trim()) {
-      const q = query.trim().toLowerCase();
-      list = list.filter(
-        (g) =>
-          g.name.toLowerCase().includes(q) ||
-          g.desc.toLowerCase().includes(q) ||
-          g.category.includes(q)
-      );
-    }
-    if (filter === "recent") return list;
-    return list.sort((a, b) => a.name.localeCompare(b.name));
-  }, [filter, query, favs, recent]);
-
-  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const safePage = Math.min(page, pages - 1);
-  const pageItems = filtered.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
-
-  const toggleFav = (id: string) => {
-    const cur = lsGet<string[]>("memphis-fav-games", []);
-    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-    lsSet("memphis-fav-games", next);
-    setFavs(next);
-  };
-
-  return (
-    <div className="flex-1">
-      <div className="mx-auto max-w-6xl px-4 py-6">
-        {/* header */}
-        <div className="flex flex-wrap items-end justify-between gap-3 mb-5">
-          <div>
-            <h1 className="text-2xl font-semibold text-white flex items-center gap-2.5">
-              <BookOpen className="size-5" /> Games
-            </h1>
-            <p className="text-xs text-[#7a7a7a] mt-1">
-              {GAMES.length} games · {GAMES.filter((g) => g.builtin).length} built
-              in-house · star your favorites
-            </p>
-          </div>
-          <div className="relative w-full sm:w-64">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-[#555]" />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search games…"
+    <div className="flex-1 flex flex-col min-h-0">
+      {/* header */}
+      <div className="px-3 sm:px-5 pt-4 pb-3 border-b border-[#141414] shrink-0 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="text-base font-semibold text-white flex items-center gap-2">
+            <Gamepad2 className="size-4" /> Play
+          </h1>
+          <span className="mono-label">
+            {total > 0 ? `${total.toLocaleString()} games ready` : "loading catalog"}
+          </span>
+          <span className="flex-1" />
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-[#555]" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search 2700+ games…"
               aria-label="Search games"
-              className="pl-8 bg-[#050505] border-[#262626] text-sm h-9"
+              spellCheck={false}
+              className="w-64 max-w-[60vw] h-9 rounded-full bg-[#050505] border border-[#1f1f1f] pl-9 pr-3 text-[13px] text-white placeholder:text-[#555] outline-none focus:border-[#3a3a3a]"
             />
+          </div>
+          <div className="flex items-center rounded-full border border-[#1f1f1f] overflow-hidden">
+            <button
+              onClick={() => setSort(sort === "az" ? "default" : "az")}
+              aria-pressed={sort === "az"}
+              title="Sort A to Z"
+              className={`px-2.5 h-9 flex items-center gap-1.5 text-[11px] transition-colors ${
+                sort === "az" ? "bg-white text-black" : "text-[#9a9a9a] hover:text-white"
+              }`}
+            >
+              <ArrowDownAZ className="size-3.5" /> A–Z
+            </button>
+            <button
+              onClick={() => setSort(sort === "za" ? "default" : "za")}
+              aria-pressed={sort === "za"}
+              title="Sort Z to A"
+              className={`px-2.5 h-9 flex items-center gap-1.5 text-[11px] border-l border-[#1f1f1f] transition-colors ${
+                sort === "za" ? "bg-white text-black" : "text-[#9a9a9a] hover:text-white"
+              }`}
+            >
+              <ArrowUpAZ className="size-3.5" /> Z–A
+            </button>
           </div>
         </div>
 
-        {/* filter tabs */}
-        <div
-          className="flex gap-1.5 overflow-x-auto pb-1 mb-4"
-          role="tablist"
-          aria-label="Game filters"
-        >
-          {GAME_CATEGORIES.map((c) => (
+        {/* filter chips */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 -mb-1" role="tablist" aria-label="Game filters">
+          {chips.map((c) => {
+            const selected = filter === c.id && cat === "all";
+            return (
+              <button
+                key={c.id}
+                role="tab"
+                aria-selected={selected}
+                onClick={() => {
+                  setFilter(c.id as Filter);
+                  setCat("all");
+                }}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[12px] border whitespace-nowrap transition-colors ${
+                  selected
+                    ? "bg-white text-black border-white"
+                    : "border-[#262626] text-[#9a9a9a] hover:text-white hover:border-[#3a3a3a]"
+                }`}
+              >
+                {c.icon}
+                {c.label}
+              </button>
+            );
+          })}
+          <span className="w-px h-5 bg-[#222] mx-1 shrink-0" aria-hidden />
+          <button
+            onClick={() => setCat("all")}
+            aria-pressed={cat === "all"}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[12px] border whitespace-nowrap transition-colors ${
+              cat === "all"
+                ? "bg-[#161616] text-white border-[#333]"
+                : "border-[#262626] text-[#9a9a9a] hover:text-white hover:border-[#3a3a3a]"
+            }`}
+          >
+            <ListFilter className="size-3" /> Categories
+          </button>
+          {categories.slice(0, 14).map((c) => (
             <button
-              key={c.id}
-              role="tab"
-              aria-selected={filter === c.id}
-              onClick={() => setFilter(c.id)}
-              className={`px-3 py-1.5 rounded-md text-xs border whitespace-nowrap transition-colors ${
-                filter === c.id
-                  ? "bg-white text-black border-white"
+              key={c.slug}
+              onClick={() => {
+                setCat(c.slug);
+                setFilter("all");
+              }}
+              aria-pressed={cat === c.slug}
+              className={`px-2.5 py-1.5 rounded-full text-[12px] border whitespace-nowrap transition-colors ${
+                cat === c.slug
+                  ? "bg-[#161616] text-white border-[#333]"
                   : "border-[#262626] text-[#9a9a9a] hover:text-white hover:border-[#3a3a3a]"
               }`}
             >
               {c.label}
-              {c.id === "favorites" && favs.length > 0 && (
-                <span className="ml-1.5 font-mono text-[10px] opacity-70">
-                  {favs.length}
-                </span>
-              )}
+              <span className="ml-1 text-[10px] text-[#666]">{c.count}</span>
             </button>
           ))}
         </div>
-
-        <div className="grid lg:grid-cols-[1fr_300px] gap-5 items-start">
-          {/* game grid */}
-          <div>
-            {pageItems.length === 0 ? (
-              <div className="border border-dashed border-[#222] rounded-lg py-16 text-center">
-                <p className="text-sm text-[#8f8f8f]">
-                  {filter === "favorites"
-                    ? "No favorites yet — tap the star on any game."
-                    : filter === "recent"
-                      ? "Nothing played yet — your recently opened games will appear here."
-                      : `No games match "${query}".`}
-                </p>
-              </div>
-            ) : (
-              <ul className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5">
-                {pageItems.map((g) => (
-                  <li key={g.id}>
-                    <div className="group relative rounded-lg border border-[#1a1a1a] bg-[#080808] hover:border-[#333] transition-colors">
-                      <button
-                        onClick={() => setPlaying(g)}
-                        className="w-full text-left p-3.5"
-                        aria-label={`Play ${g.name}`}
-                      >
-                        <div className="aspect-[5/3] rounded-md border border-[#1c1c1c] bg-black flex items-center justify-center mb-3 overflow-hidden relative">
-                          <span className="font-mono text-[10px] tracking-[0.25em] text-[#3a3a3a] group-hover:text-[#5a5a5a] transition-colors">
-                            {g.builtin ? "MEMPHIS" : "EMBED"}
-                          </span>
-                          <span className="absolute bottom-1.5 right-2 font-mono text-[9px] text-[#333]">
-                            {g.category}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[13px] text-white truncate">
-                            {g.name}
-                          </span>
-                          {g.builtin && (
-                            <span className="size-1.5 rounded-[2px] bg-[#3a3a3a] group-hover:bg-white transition-colors shrink-0" />
-                          )}
-                        </div>
-                        <p className="text-[11px] text-[#666] truncate mt-0.5">
-                          {g.desc}
-                        </p>
-                      </button>
-                      <button
-                        onClick={() => toggleFav(g.id)}
-                        aria-label={
-                          favs.includes(g.id)
-                            ? `Remove ${g.name} from favorites`
-                            : `Add ${g.name} to favorites`
-                        }
-                        className="absolute top-2 right-2 p-1.5 rounded-md bg-black/60 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
-                      >
-                        <Star
-                          className={`size-3.5 ${
-                            favs.includes(g.id)
-                              ? "fill-white text-white"
-                              : "text-[#777] hover:text-white"
-                          }`}
-                        />
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {/* pagination */}
-            {filtered.length > 0 && (
-              <div className="flex items-center justify-between mt-4">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={safePage === 0}
-                  onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  className="border-[#262626] text-[#9a9a9a] hover:text-white"
-                >
-                  <ChevronLeft className="size-4" /> Prev
-                </Button>
-                <span className="font-mono text-xs text-[#7a7a7a]">
-                  {safePage + 1} / {pages} ({filtered.length}{" "}
-                  {filtered.length === 1 ? "item" : "items"})
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={safePage >= pages - 1}
-                  onClick={() => setPage((p) => Math.min(pages - 1, p + 1))}
-                  className="border-[#262626] text-[#9a9a9a] hover:text-white"
-                >
-                  Next <ChevronRight className="size-4" />
-                </Button>
-              </div>
-            )}
-
-            <button
-              className="mt-4 text-[11px] text-[#666] hover:text-white u-link"
-              onClick={() => {
-                setReportTarget({ kind: "game", target: "General games feedback" });
-                openModal("report");
-              }}
-            >
-              Game not working? Report it
-            </button>
-          </div>
-
-          <LeaderboardPanel />
-        </div>
       </div>
 
-      {playing && (
-        <GamePlayer game={playing} onClose={() => setPlaying(null)} />
-      )}
+      {/* grid */}
+      <div className="flex-1 overflow-y-auto memphis-scroll">
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-24 gap-3 text-[#777]">
+            <Loader2 className="size-6 animate-spin text-white" />
+            <p className="text-xs font-mono">loading {total ? total.toLocaleString() : "2700+"} games…</p>
+          </div>
+        ) : games.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-24 gap-3 text-center px-6">
+            <Sparkles className="size-7 text-[#555]" />
+            <p className="text-sm text-white">
+              {filter === "favorites"
+                ? "No favorites yet — tap the star on any game."
+                : debouncedQ
+                  ? `Nothing matched “${debouncedQ}”.`
+                  : "Nothing here."}
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 p-3 sm:p-5">
+              {games.map((g) => {
+                const isFav = favs.includes(g.id);
+                return (
+                  <button
+                    key={g.id}
+                    onClick={() => openGame(g)}
+                    className="group relative rounded-xl border border-[#1a1a1a] bg-[#080808] hover:border-[#3a3a3a] hover:bg-[#0d0d0d] transition-all text-left overflow-hidden focus-visible:outline focus-visible:outline-white/60"
+                    aria-label={`Play ${g.name}`}
+                  >
+                    <div className="aspect-[4/3] bg-[#101010] overflow-hidden relative">
+                      {g.thumb ? (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img
+                          src={g.thumb}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                          className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300 grayscale-[35%] group-hover:grayscale-0"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.opacity = "0";
+                          }}
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center">
+                          <Gamepad2 className="size-8 text-[#333]" />
+                        </div>
+                      )}
+                      {isFav && (
+                        <span className="absolute top-1.5 right-1.5 bg-black/70 rounded-full p-1">
+                          <Star className="size-3 fill-white text-white" />
+                        </span>
+                      )}
+                      {g.builtin && (
+                        <span className="absolute bottom-1.5 left-1.5 mono-label !text-[9px] bg-black/70 rounded px-1.5 py-0.5">
+                          built-in
+                        </span>
+                      )}
+                    </div>
+                    <div className="p-2.5">
+                      <div className="text-[12.5px] text-white truncate font-medium">{g.name}</div>
+                      <div className="text-[10.5px] text-[#666] truncate">
+                        {g.category}
+                        {g.tags && g.tags.length > 0 ? ` · ${g.tags.slice(0, 2).join(", ")}` : ""}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* infinite scroll sentinel + load more */}
+            <div ref={sentinelRef} className="h-2" aria-hidden />
+            {games.length < total && (
+              <div className="flex justify-center py-6">
+                <Button
+                  variant="outline"
+                  onClick={() => void loadMore()}
+                  disabled={loadingMore}
+                  className="border-[#262626] text-[#bbb] hover:text-white hover:bg-[#101010]"
+                >
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="size-4 mr-2 animate-spin" /> Loading…
+                    </>
+                  ) : (
+                    <>
+                      <Server className="size-4 mr-2" /> Load more ({(total - games.length).toLocaleString()} left)
+                    </>
+                  )}
+                </Button>
+              </div>
+            )}
+            <div className="h-6" />
+          </>
+        )}
+      </div>
+
+      {/* player overlay */}
+      {playing && <GamePlayer game={playing} onClose={closeGame} />}
     </div>
   );
 }

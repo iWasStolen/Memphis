@@ -1,23 +1,22 @@
 import { db } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function validSessionId(s: string | null): boolean {
+  return !!s && /^[a-zA-Z0-9_-]{8,64}$/.test(s);
+}
+
 /**
- * GET /api/ai/conversations — list the user's conversations + today's token usage
+ * GET /api/ai/conversations?sessionId=... — list conversations for an anonymous browser session
  */
 export async function GET(req: Request) {
-  const user = await getSessionUser(req);
-  if (!user) return Response.json({ conversations: [], tokensUsed: 0 });
-  const day = new Date().toISOString().slice(0, 10);
-  const usage = await db.aITokenUsage.findUnique({
-    where: { userId_day: { userId: user.id, day } },
-  });
+  const sessionId = new URL(req.url).searchParams.get("sessionId");
+  if (!validSessionId(sessionId)) return Response.json({ conversations: [] });
   const conversations = await db.aIConversation.findMany({
-    where: { userId: user.id },
+    where: { sessionId: sessionId! },
     orderBy: { updatedAt: "desc" },
-    take: 40,
+    take: 60,
     select: {
       id: true,
       title: true,
@@ -27,30 +26,5 @@ export async function GET(req: Request) {
       _count: { select: { messages: true } },
     },
   });
-  return Response.json({
-    conversations,
-    tokensUsed: usage?.tokens ?? 0,
-  });
-}
-
-/**
- * POST /api/ai/conversations — create an empty conversation
- */
-export async function POST(req: Request) {
-  const user = await getSessionUser(req);
-  if (!user) return Response.json({ error: "Sign in first" }, { status: 401 });
-  let body: { title?: string; instructions?: string } = {};
-  try {
-    body = await req.json();
-  } catch {
-    /* empty body is fine */
-  }
-  const conversation = await db.aIConversation.create({
-    data: {
-      userId: user.id,
-      title: (body.title ?? "New chat").slice(0, 60),
-      instructions: (body.instructions ?? "").slice(0, 1000),
-    },
-  });
-  return Response.json({ conversation });
+  return Response.json({ conversations });
 }

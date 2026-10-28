@@ -1,8 +1,17 @@
 "use client";
 
+/* ============================================================
+   Memphis AI — a real chat backed by GLM (via z-ai-web-dev-sdk
+   on the server). Free, no sign-in, no token limits. Streams
+   token-by-token over SSE and renders markdown.
+   ============================================================ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, lsGet, lsSet, getToken } from "@/lib/store";
-import { useAuth } from "@/lib/socket";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { aiSessionId, lsGet, lsSet } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -23,14 +32,18 @@ import {
   ChevronRight,
   RotateCcw,
   MessagesSquare,
-  Lock,
+  Copy,
+  Check,
+  Infinity as InfinityIcon,
+  Menu,
+  Loader2,
 } from "lucide-react";
 
 interface AIMsg {
   id: string;
   role: string;
   content: string;
-  createdAt?: string;
+  streaming?: boolean;
 }
 
 interface ConversationRow {
@@ -48,8 +61,63 @@ interface Flashcard {
 
 const FLASHCARD_KEY = "memphis-flashcards";
 
+/* ---------------- markdown renderer ---------------- */
+
+function Md({ text }: { text: string }) {
+  return (
+    <div className="memphis-md text-[13.5px] leading-relaxed break-words">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code(props) {
+            const { className, children } = props;
+            const match = /language-(\w+)/.exec(className || "");
+            const code = String(children ?? "").replace(/\n$/, "");
+            if (!match && !code.includes("\n")) {
+              return (
+                <code className="bg-[#161616] border border-[#262626] rounded px-1 py-0.5 text-[12px] font-mono">
+                  {code}
+                </code>
+              );
+            }
+            return (
+              <code className={className}>
+                <SyntaxHighlighter
+                  style={oneDark as Record<string, Record<string, string>>}
+                  language={match ? match[1] : "text"}
+                  PreTag="div"
+                  customStyle={{
+                    borderRadius: "10px",
+                    border: "1px solid #1f1f1f",
+                    fontSize: "12px",
+                    margin: "8px 0",
+                    background: "#0a0a0a",
+                  }}
+                >
+                  {code}
+                </SyntaxHighlighter>
+              </code>
+            );
+          },
+          a(props) {
+            const { href, children } = props;
+            return (
+              <a href={href} target="_blank" rel="noreferrer noopener" className="u-link text-white underline underline-offset-2">
+                {children}
+              </a>
+            );
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+/* ---------------- main view ---------------- */
+
 export default function AiView() {
-  const { user } = useAuth();
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AIMsg[]>([]);
@@ -58,29 +126,27 @@ export default function AiView() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
-  const [tokensUsed, setTokensUsed] = useState(0);
   const [cards, setCards] = useState<Flashcard[]>([]);
   const [cardIdx, setCardIdx] = useState(0);
   const [cardFlipped, setCardFlipped] = useState(false);
   const [genCards, setGenCards] = useState(false);
   const [showCards, setShowCards] = useState(false);
   const [savingInstructions, setSavingInstructions] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
-  const signedIn = !!user && !!getToken();
-
-  /* ---------- load conversation list ---------- */
+  /* ---------- conversation list ---------- */
   const loadConversations = useCallback(async () => {
-    if (!signedIn) return;
-    const r = await api<{
-      conversations?: ConversationRow[];
-      tokensUsed?: number;
-    }>("/api/ai/conversations");
+    const sid = aiSessionId();
+    if (!sid) return;
+    const r = await fetch(`/api/ai/conversations?sessionId=${encodeURIComponent(sid)}`);
     if (r.ok) {
-      setConversations(r.data.conversations ?? []);
-      setTokensUsed(r.data.tokensUsed ?? 0);
+      const data = (await r.json()) as { conversations?: ConversationRow[] };
+      setConversations(data.conversations ?? []);
     }
-  }, [signedIn]);
+  }, []);
 
   useEffect(() => {
     void loadConversations();
@@ -89,19 +155,25 @@ export default function AiView() {
 
   /* ---------- load messages for active conversation ---------- */
   useEffect(() => {
-    if (!activeId || !signedIn) return;
+    if (!activeId) return;
+    const sid = aiSessionId();
     void (async () => {
-      const r = await api<{
-        conversation?: ConversationRow;
-        messages?: AIMsg[];
-      }>(`/api/ai/conversations/${activeId}`);
-      if (r.ok && r.data.conversation) {
-        setMessages(r.data.messages ?? []);
-        setInstructions(r.data.conversation.instructions ?? "");
-        setInstructionsDraft(r.data.conversation.instructions ?? "");
+      const r = await fetch(
+        `/api/ai/conversations/${activeId}?sessionId=${encodeURIComponent(sid)}`
+      );
+      if (r.ok) {
+        const data = (await r.json()) as {
+          conversation?: ConversationRow;
+          messages?: AIMsg[];
+        };
+        if (data.conversation) {
+          setMessages(data.messages ?? []);
+          setInstructions(data.conversation.instructions ?? "");
+          setInstructionsDraft(data.conversation.instructions ?? "");
+        }
       }
     })();
-  }, [activeId, signedIn]);
+  }, [activeId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -109,62 +181,134 @@ export default function AiView() {
 
   /* ---------- actions ---------- */
   const newChat = () => {
+    if (sending) abortRef.current?.abort();
     setActiveId(null);
     setMessages([]);
     setInstructions("");
     setInstructionsDraft("");
     setError("");
+    setSidebarOpen(false);
   };
 
   const send = async () => {
     const text = input.trim();
     if (!text || sending) return;
-    if (!signedIn) {
-      setError("Sign in to Chat first (username + password) — the AI tutor uses your chat account.");
-      return;
-    }
+    const sid = aiSessionId();
+    if (!sid) return;
     setError("");
     setInput("");
     setSending(true);
-    setMessages((m) => [...m, { id: "local-" + Date.now(), role: "user", content: text }]);
-    const r = await api<{
-      conversationId?: string;
-      message?: AIMsg;
-      tokensUsed?: number;
-      error?: string;
-    }>("/api/ai/chat", {
-      method: "POST",
-      body: JSON.stringify({
-        conversationId: activeId,
-        message: text,
-        instructions: instructionsDraft,
-      }),
-    });
-    setSending(false);
-    if (!r.ok || r.data.error || !r.data.message) {
-      setError(r.data.error || "The tutor is unavailable right now — try again.");
-      return;
+
+    const userMsg: AIMsg = { id: "local-" + Date.now(), role: "user", content: text };
+    const streamMsg: AIMsg = { id: "stream", role: "assistant", content: "", streaming: true };
+    setMessages((m) => [...m, userMsg, streamMsg]);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const res = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionId: sid,
+          conversationId: activeId,
+          message: text,
+          instructions: instructionsDraft,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok || !res.body) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || `Request failed (${res.status})`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let acc = "";
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() ?? "";
+        for (const block of blocks) {
+          const evLine = block.split("\n").find((l) => l.startsWith("event: "));
+          const dataLine = block.split("\n").find((l) => l.startsWith("data: "));
+          if (!evLine || !dataLine) continue;
+          const event = evLine.slice(7).trim();
+          let payload: Record<string, unknown> = {};
+          try {
+            payload = JSON.parse(dataLine.slice(6));
+          } catch {
+            continue;
+          }
+          if (event === "meta" && typeof payload.conversationId === "string") {
+            setActiveId(payload.conversationId);
+          } else if (event === "delta" && typeof payload.text === "string") {
+            acc += payload.text;
+            setMessages((m) =>
+              m.map((msg) => (msg.id === "stream" ? { ...msg, content: acc } : msg))
+            );
+          } else if (event === "error") {
+            throw new Error(String(payload.message || "The model is unavailable."));
+          } else if (event === "done") {
+            setMessages((m) =>
+              m.map((msg) =>
+                msg.id === "stream"
+                  ? {
+                      id: String(payload.messageId ?? "saved"),
+                      role: "assistant",
+                      content: acc,
+                    }
+                  : msg
+              )
+            );
+          }
+        }
+      }
+      void loadConversations();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg !== "The user aborted a request." && !msg.toLowerCase().includes("abort")) {
+        setError(msg);
+      }
+      setMessages((m) => m.filter((x) => x.id !== "stream" || x.content));
+      setMessages((m) =>
+        m.map((x) => (x.id === "stream" ? { ...x, streaming: false } : x))
+      );
+    } finally {
+      setSending(false);
+      abortRef.current = null;
     }
-    setMessages((m) => [...m, r.data.message!]);
-    if (r.data.conversationId) setActiveId(r.data.conversationId);
-    if (r.data.tokensUsed != null) setTokensUsed(r.data.tokensUsed);
-    void loadConversations();
   };
 
   const saveInstructions = async () => {
-    setSavingInstructions(true);
-    if (activeId) {
-      await api(`/api/ai/conversations/${activeId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ instructions: instructionsDraft }),
-      });
+    if (!activeId) {
+      setInstructions(instructionsDraft);
+      return;
     }
+    setSavingInstructions(true);
+    await fetch(
+      `/api/ai/conversations/${activeId}?sessionId=${encodeURIComponent(aiSessionId())}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ instructions: instructionsDraft }),
+      }
+    );
     setInstructions(instructionsDraft);
     setSavingInstructions(false);
   };
 
   const deleteConversation = async (id: string) => {
-    await api(`/api/ai/conversations/${id}`, { method: "DELETE" });
+    await fetch(
+      `/api/ai/conversations/${id}?sessionId=${encodeURIComponent(aiSessionId())}`,
+      { method: "DELETE" }
+    );
     if (activeId === id) newChat();
     void loadConversations();
   };
@@ -172,25 +316,37 @@ export default function AiView() {
   const generateFlashcards = async () => {
     if (genCards) return;
     if (!messages.length) {
-      setError("Chat with the tutor first, then build flashcards from the lesson.");
+      setError("Chat about a topic first, then build flashcards from it.");
       return;
     }
     setGenCards(true);
     setError("");
-    const r = await api<{ cards?: Flashcard[]; error?: string }>("/api/ai/flashcards", {
+    const r = await fetch("/api/ai/flashcards", {
       method: "POST",
-      body: JSON.stringify({ conversationId: activeId }),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: aiSessionId(), conversationId: activeId }),
     });
     setGenCards(false);
-    if (r.ok && r.data.cards?.length) {
-      const next = [...r.data.cards, ...cards].slice(0, 120);
+    const data = (await r.json().catch(() => ({}))) as { cards?: Flashcard[]; error?: string };
+    if (r.ok && data.cards?.length) {
+      const next = [...data.cards, ...cards].slice(0, 120);
       setCards(next);
       lsSet(FLASHCARD_KEY, next);
       setCardIdx(0);
       setCardFlipped(false);
       setShowCards(true);
     } else {
-      setError(r.data.error || "Could not build flashcards — try again.");
+      setError(data.error || "Could not build flashcards — try again.");
+    }
+  };
+
+  const copyMessage = async (id: string, content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 1500);
+    } catch {
+      /* clipboard unavailable */
     }
   };
 
@@ -198,29 +354,44 @@ export default function AiView() {
   const card = cards[cardIdx];
 
   return (
-    <div className="flex-1 flex min-h-0">
+    <div className="flex-1 flex min-h-0 relative">
       {/* sidebar */}
-      <aside className="hidden md:flex flex-col w-60 shrink-0 border-r border-[#141414]">
-        <div className="p-3 border-b border-[#141414]">
+      <aside
+        className={`${sidebarOpen ? "flex" : "hidden"} md:flex absolute md:relative inset-0 md:inset-auto z-30 md:z-auto bg-black/95 md:bg-transparent flex-col w-64 md:w-60 shrink-0 border-r border-[#141414]`}
+      >
+        <div className="p-3 border-b border-[#141414] flex gap-2">
           <Button
             onClick={newChat}
-            className="w-full bg-white text-black hover:bg-[#e0e0e0]"
+            className="flex-1 bg-white text-black hover:bg-[#e0e0e0]"
             size="sm"
           >
             <Plus className="size-4 mr-1" /> New chat
           </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            className="md:hidden border-[#2a2a2a] text-white"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close conversation list"
+          >
+            <ChevronRight className="size-4" />
+          </Button>
         </div>
         <div className="flex-1 overflow-y-auto p-2 memphis-scroll">
-          <p className="mono-label px-2 py-1">Today</p>
+          <p className="mono-label px-2 py-1">Your chats</p>
           {conversations.length === 0 && (
             <p className="text-[12px] text-[#555] px-2 py-2">
-              Your saved chats appear here.
+              Your conversations appear here — saved on this Memphis server for your browser
+              session.
             </p>
           )}
           {conversations.map((c) => (
             <div key={c.id} className="group flex items-center">
               <button
-                onClick={() => setActiveId(c.id)}
+                onClick={() => {
+                  setActiveId(c.id);
+                  setSidebarOpen(false);
+                }}
                 className={`flex-1 text-left px-2 py-1.5 rounded-md text-[13px] truncate transition-colors ${
                   activeId === c.id
                     ? "bg-[#141414] text-white"
@@ -239,27 +410,29 @@ export default function AiView() {
             </div>
           ))}
         </div>
-        <div className="p-3 border-t border-[#141414]">
-          <div className="flex items-center justify-between text-[11px] text-[#777]">
-            <span className="font-mono">
-              {tokensUsed.toLocaleString()} / 6.7k tokens today
-            </span>
-          </div>
-          <div className="h-1 bg-[#141414] rounded-full mt-1.5 overflow-hidden">
-            <div
-              className="h-full bg-white transition-all"
-              style={{ width: `${Math.min(100, (tokensUsed / 6700) * 100)}%` }}
-            />
-          </div>
+        <div className="p-3 border-t border-[#141414] flex items-center gap-1.5 text-[11px] text-[#777]">
+          <InfinityIcon className="size-3.5" />
+          GLM · free · unlimited
         </div>
       </aside>
 
       {/* main */}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="border-b border-[#141414] px-4 py-2.5 flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="md:hidden text-white size-8"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open conversation list"
+          >
+            <Menu className="size-4" />
+          </Button>
           <Sparkles className="size-4 text-white" />
           <h1 className="text-sm font-semibold text-white">Memphis AI</h1>
-          <span className="text-[11px] text-[#555] hidden sm:inline">study tutor</span>
+          <span className="text-[11px] text-[#555] hidden sm:inline">
+            powered by GLM
+          </span>
           <div className="ml-auto flex items-center gap-2">
             <Button
               variant="outline"
@@ -288,70 +461,55 @@ export default function AiView() {
           </div>
         </div>
 
-        {!signedIn ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-center">
-            <Lock className="size-8 text-[#555]" />
-            <h2 className="text-base font-semibold text-white">How can I help today?</h2>
-            <p className="text-[13px] text-[#8f8f8f] max-w-sm">
-              The AI tutor needs a free account. Open the Chat section to register
-              (username and password is all it takes), then come back.
-            </p>
-            <p className="text-[11px] text-[#555] font-mono">
-              0 / 6.7k tokens today
-            </p>
-          </div>
-        ) : (
-          <>
-            {/* messages */}
-            <div className="flex-1 overflow-y-auto memphis-scroll">
-              <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
-                {messages.length === 0 && !sending && (
-                  <div className="text-center py-12">
-                    <Sparkles className="size-7 mx-auto text-[#555] mb-3" />
-                    <h2 className="text-lg text-white font-semibold">
-                      How can I help today?
-                    </h2>
-                    <p className="text-[13px] text-[#777] mt-2">
-                      Ask about any subject — math steps, essay feedback, science
-                      review, test prep.
-                    </p>
-                    <div className="mt-6 grid sm:grid-cols-2 gap-2 text-left">
-                      {[
-                        "Explain the quadratic formula with an example",
-                        "Quiz me on cell organelles",
-                        "Give feedback on my essay introduction",
-                        "Help me plan SAT practice this week",
-                      ].map((s) => (
-                        <button
-                          key={s}
-                          onClick={() => setInput(s)}
-                          className="text-[13px] text-[#c9c9c9] border border-[#1a1a1a] bg-[#080808] rounded-lg p-3 hover:border-[#3a3a3a] hover:bg-[#0d0d0d] transition-colors"
-                        >
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {messages.map((m) => (
-                  <div
-                    key={m.id}
-                    className={m.role === "user" ? "flex justify-end" : "flex"}
-                  >
-                    <div
-                      className={`max-w-[85%] rounded-xl px-3.5 py-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap break-words ${
-                        m.role === "user"
-                          ? "bg-white text-black"
-                          : "bg-[#0d0d0d] text-[#dcdcdc] border border-[#1a1a1a]"
-                      }`}
+        {/* messages */}
+        <div className="flex-1 overflow-y-auto memphis-scroll">
+          <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+            {messages.length === 0 && !sending && (
+              <div className="text-center py-12">
+                <Sparkles className="size-7 mx-auto text-[#555] mb-3" />
+                <h2 className="text-lg text-white font-semibold">How can I help today?</h2>
+                <p className="text-[13px] text-[#777] mt-2">
+                  A real AI chat running on GLM — free, unlimited, no account needed.
+                  Ask anything.
+                </p>
+                <div className="mt-6 grid sm:grid-cols-2 gap-2 text-left">
+                  {[
+                    "Explain how a scramjet engine works",
+                    "Write a Python script to rename my files",
+                    "Help me draft a message to my teacher",
+                    "Give me a 20-minute full-body workout plan",
+                  ].map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setInput(s)}
+                      className="text-[13px] text-[#c9c9c9] border border-[#1a1a1a] bg-[#080808] rounded-lg p-3 hover:border-[#3a3a3a] hover:bg-[#0d0d0d] transition-colors"
                     >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {messages.map((m) => (
+              <div
+                key={m.id}
+                className={m.role === "user" ? "flex justify-end" : "flex"}
+              >
+                <div
+                  className={`group relative max-w-[88%] rounded-xl px-3.5 py-2.5 ${
+                    m.role === "user"
+                      ? "bg-white text-black"
+                      : "bg-[#0d0d0d] text-[#dcdcdc] border border-[#1a1a1a]"
+                  }`}
+                >
+                  {m.role === "user" ? (
+                    <p className="text-[13.5px] leading-relaxed whitespace-pre-wrap break-words">
                       {m.content}
-                    </div>
-                  </div>
-                ))}
-                {sending && (
-                  <div className="flex">
-                    <div className="bg-[#0d0d0d] border border-[#1a1a1a] rounded-xl px-3.5 py-2.5 text-[13px] text-[#777] flex items-center gap-1.5">
+                    </p>
+                  ) : m.content ? (
+                    <Md text={m.content} />
+                  ) : (
+                    <span className="flex items-center gap-1.5 text-[13px] text-[#777]">
                       <span className="boot-pulse">thinking</span>
                       <span className="flex gap-0.5">
                         {[0, 1, 2].map((i) => (
@@ -362,99 +520,115 @@ export default function AiView() {
                           />
                         ))}
                       </span>
-                    </div>
-                  </div>
-                )}
-                <div ref={bottomRef} />
-              </div>
-            </div>
-
-            {/* custom instructions */}
-            {instructions && (
-              <div className="px-4 py-2 border-t border-[#141414] bg-[#050505]">
-                <p className="text-[11px] text-[#666]">
-                  <span className="font-mono uppercase tracking-wider">custom instructions:</span>{" "}
-                  {instructions}
-                </p>
-              </div>
-            )}
-
-            {error && (
-              <div className="px-4 py-2 border-t border-[#141414]">
-                <p className="text-[12px] text-white bg-[#161616] border border-[#333] rounded px-2.5 py-1.5">
-                  {error}
-                </p>
-              </div>
-            )}
-
-            {/* input */}
-            <div className="border-t border-[#141414] p-3">
-              <div className="max-w-2xl mx-auto">
-                <div className="flex gap-2 items-end">
-                  <div className="flex-1">
-                    <Textarea
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          void send();
-                        }
-                      }}
-                      placeholder="Ask anything — Shift+Enter for a new line"
-                      rows={2}
-                      maxLength={4000}
-                      aria-label="Message the AI tutor"
-                      className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] focus-visible:ring-white/30 min-h-0 resize-none"
-                    />
-                    <div className="flex items-center justify-between mt-1.5">
-                      <span className="text-[11px] text-[#555] font-mono md:hidden">
-                        {tokensUsed.toLocaleString()} / 6.7k tokens
-                      </span>
-                      <span className="hidden md:inline text-[11px] text-[#555]">
-                        Enter to send · Shift+Enter for newline
-                      </span>
-                    </div>
-                  </div>
-                  <Button
-                    onClick={() => void send()}
-                    disabled={!input.trim() || sending}
-                    className="bg-white text-black hover:bg-[#e0e0e0] self-start"
-                    aria-label="Send message"
-                  >
-                    <Send className="size-4" />
-                  </Button>
-                </div>
-
-                {/* custom instructions editor */}
-                <details className="mt-2 group">
-                  <summary className="text-[12px] text-[#777] hover:text-white cursor-pointer select-none flex items-center gap-1.5">
-                    <MessagesSquare className="size-3.5" /> Custom instructions
-                  </summary>
-                  <div className="mt-2 flex gap-2">
-                    <Textarea
-                      value={instructionsDraft}
-                      onChange={(e) => setInstructionsDraft(e.target.value)}
-                      placeholder="e.g. I'm in 8th grade algebra — explain step by step and check my work before giving answers."
-                      rows={2}
-                      maxLength={1000}
-                      className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] text-[12px] focus-visible:ring-white/30 min-h-0"
-                    />
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void saveInstructions()}
-                      disabled={savingInstructions}
-                      className="border-[#2a2a2a] text-white hover:bg-[#101010] self-start"
+                    </span>
+                  )}
+                  {m.role === "assistant" && m.content && !m.streaming && (
+                    <button
+                      onClick={() => void copyMessage(m.id, m.content)}
+                      aria-label="Copy message"
+                      className="absolute -bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-[#161616] border border-[#262626] rounded p-1 text-[#888] hover:text-white"
                     >
-                      <Save className="size-3.5" /> {savingInstructions ? "…" : "Save"}
-                    </Button>
-                  </div>
-                </details>
+                      {copiedId === m.id ? (
+                        <Check className="size-3" />
+                      ) : (
+                        <Copy className="size-3" />
+                      )}
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          </>
+            ))}
+            <div ref={bottomRef} />
+          </div>
+        </div>
+
+        {/* custom instructions */}
+        {instructions && (
+          <div className="px-4 py-2 border-t border-[#141414] bg-[#050505]">
+            <p className="text-[11px] text-[#666]">
+              <span className="font-mono uppercase tracking-wider">custom instructions:</span>{" "}
+              {instructions}
+            </p>
+          </div>
         )}
+
+        {error && (
+          <div className="px-4 py-2 border-t border-[#141414]">
+            <p className="text-[12px] text-white bg-[#161616] border border-[#333] rounded px-2.5 py-1.5">
+              {error}
+            </p>
+          </div>
+        )}
+
+        {/* input */}
+        <div className="border-t border-[#141414] p-3">
+          <div className="max-w-2xl mx-auto">
+            <div className="flex gap-2 items-end">
+              <div className="flex-1">
+                <Textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void send();
+                    }
+                  }}
+                  placeholder="Ask anything — Shift+Enter for a new line"
+                  rows={2}
+                  maxLength={8000}
+                  aria-label="Message Memphis AI"
+                  className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] focus-visible:ring-white/30 min-h-0 resize-none"
+                />
+                <div className="flex items-center justify-between mt-1.5">
+                  <span className="text-[11px] text-[#555]">
+                    {sending ? (
+                      <span className="inline-flex items-center gap-1">
+                        <Loader2 className="size-3 animate-spin" /> GLM is writing…
+                      </span>
+                    ) : (
+                      "Enter to send · Shift+Enter for newline"
+                    )}
+                  </span>
+                </div>
+              </div>
+              <Button
+                onClick={() => void send()}
+                disabled={!input.trim() || sending}
+                className="bg-white text-black hover:bg-[#e0e0e0] self-start"
+                aria-label="Send message"
+              >
+                <Send className="size-4" />
+              </Button>
+            </div>
+
+            {/* custom instructions editor */}
+            <details className="mt-2 group">
+              <summary className="text-[12px] text-[#777] hover:text-white cursor-pointer select-none flex items-center gap-1.5">
+                <MessagesSquare className="size-3.5" /> Custom instructions
+              </summary>
+              <div className="mt-2 flex gap-2">
+                <Textarea
+                  value={instructionsDraft}
+                  onChange={(e) => setInstructionsDraft(e.target.value)}
+                  placeholder="e.g. Answer in Spanish. I'm a beginner coder — explain like I'm new."
+                  rows={2}
+                  maxLength={1000}
+                  className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] text-[12px] focus-visible:ring-white/30 min-h-0"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void saveInstructions()}
+                  disabled={savingInstructions}
+                  className="border-[#2a2a2a] text-white hover:bg-[#101010] self-start"
+                >
+                  <Save className="size-3.5" /> {savingInstructions ? "…" : "Save"}
+                </Button>
+              </div>
+            </details>
+          </div>
+        </div>
       </div>
 
       {/* flashcards modal */}

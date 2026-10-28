@@ -123,13 +123,15 @@ model Report {
 }
 
 model AIConversation {
-  id           String   @id @default(cuid())
-  userId       String
-  title        String   @default("New chat")
-  instructions String   @default("")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id           String       @id @default(cuid())
+  sessionId    String
+  title        String       @default("New chat")
+  instructions String       @default("")
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
   messages     AIMessage[]
+
+  @@index([sessionId, updatedAt])
 }
 
 model AIMessage {
@@ -139,15 +141,8 @@ model AIMessage {
   content        String
   conversation   AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   createdAt      DateTime       @default(now())
-}
 
-model AITokenUsage {
-  id     String @id @default(cuid())
-  userId String
-  day    String // YYYY-MM-DD
-  tokens Int    @default(0)
-
-  @@unique([userId, day])
+  @@index([conversationId, createdAt])
 }
 
 model ModAction {
@@ -157,28 +152,6 @@ model ModAction {
   action    String
   reason    String   @default("")
   createdAt DateTime @default(now())
-}
-
-model WatchItem {
-  id          String @id @default(cuid())
-  kind        String // movie | anime | youtube
-  itemKey     String
-  views       Int    @default(0)
-  ratingSum   Int    @default(0)
-  ratingCount Int    @default(0)
-
-  @@unique([kind, itemKey])
-}
-
-model WatchComment {
-  id        String   @id @default(cuid())
-  itemKey   String
-  userId    String?
-  author    String
-  content   String
-  createdAt DateTime @default(now())
-
-  @@index([itemKey, createdAt])
 }
 
 model ChatSettings {

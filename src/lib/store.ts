@@ -80,6 +80,14 @@ interface UIState {
   finishBoot: () => void;
   reportTarget: { kind: string; target: string } | null;
   setReportTarget: (t: { kind: string; target: string } | null) => void;
+  /** url to open through the proxy in the Browse view (set by Apps/Listen/Watch) */
+  proxyTarget: { url: string; nonce: number } | null;
+  openInProxy: (url: string) => void;
+  clearProxyTarget: () => void;
+  /** scramjet engine status, managed by the app shell */
+  proxyState: "idle" | "loading" | "ready" | "error";
+  setProxyState: (s: "idle" | "loading" | "ready" | "error", err?: string) => void;
+  proxyError: string;
 }
 
 export const useUI = create<UIState>()((set) => ({
@@ -92,6 +100,13 @@ export const useUI = create<UIState>()((set) => ({
   finishBoot: () => set({ bootDone: true }),
   reportTarget: null,
   setReportTarget: (t) => set({ reportTarget: t }),
+  proxyTarget: null,
+  openInProxy: (url) =>
+    set({ proxyTarget: { url, nonce: Date.now() }, view: "browse", modal: "closed" }),
+  clearProxyTarget: () => set({ proxyTarget: null }),
+  proxyState: "idle",
+  proxyError: "",
+  setProxyState: (s, err = "") => set({ proxyState: s, proxyError: err }),
 }));
 
 /* ---------------- Local storage helpers ---------------- */
@@ -134,6 +149,24 @@ export function useLocalList(key: string, limit = 200) {
     lsSet(key, lsGet<string[]>(key, []).filter((x) => x !== id));
   };
   return { list, push, toggle, remove };
+}
+
+/* ---------------- Anonymous AI session id ---------------- */
+
+const AI_SESSION_KEY = "memphis-ai-session";
+
+export function aiSessionId(): string {
+  if (typeof window === "undefined") return "";
+  let id = window.localStorage.getItem(AI_SESSION_KEY);
+  if (!id || !/^[a-zA-Z0-9_-]{8,64}$/.test(id)) {
+    const rand =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID().replace(/-/g, "")
+        : Math.random().toString(36).slice(2) + Date.now().toString(36);
+    id = ("s" + rand).slice(0, 40);
+    window.localStorage.setItem(AI_SESSION_KEY, id);
+  }
+  return id;
 }
 
 /* ---------------- Auth token helpers ---------------- */

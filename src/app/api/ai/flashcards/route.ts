@@ -1,35 +1,29 @@
 import { db } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
-import { rateLimit, clientIp } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
  * POST /api/ai/flashcards — generate study flashcards from a conversation
- * body: { conversationId, topic? }
+ * body: { sessionId, conversationId?, topic? }
  * Returns { cards: [{ front, back }] } — the client stores them locally.
  */
 export async function POST(req: Request) {
-  const ip = clientIp(req);
-  if (!rateLimit(`ai:cards:${ip}`, 6, 0.05))
-    return Response.json({ error: "Too many requests — wait a minute." }, { status: 429 });
-
-  const user = await getSessionUser(req);
-  if (!user) return Response.json({ error: "Sign in first" }, { status: 401 });
-
-  let body: { conversationId?: string; topic?: string };
+  let body: { sessionId?: string; conversationId?: string; topic?: string };
   try {
     body = await req.json();
   } catch {
     return Response.json({ error: "Invalid request" }, { status: 400 });
   }
+  const sessionId = body.sessionId ?? "";
+  if (!/^[a-zA-Z0-9_-]{8,64}$/.test(sessionId))
+    return Response.json({ error: "Invalid session" }, { status: 400 });
 
   /* gather source text: conversation history or topic */
   let source = "";
   if (body.conversationId) {
     const conversation = await db.aIConversation.findFirst({
-      where: { id: body.conversationId, userId: user.id },
+      where: { id: body.conversationId, sessionId },
     });
     if (!conversation)
       return Response.json({ error: "Conversation not found" }, { status: 404 });

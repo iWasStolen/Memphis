@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Memphis unBLACKed",
   description:
-    "Memphis unBLACKed — a study portal with games, apps, chat, AI tutor, music, video and a web browser.",
+    "Memphis unBLACKed — 2700+ games, 50 apps, Spotify, YouTube, unlimited GLM AI chat and a Scramjet web proxy.",
   icons: {
     icon: "/memphis.svg",
   },
@@ -36,6 +36,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning className="dark">
+      <head>
+        {/* Scramjet proxy engine (page context) + bare-mux transport manager */}
+        <script src="/scram/scramjet.all.js" defer />
+        <script src="/baremux/index.js" defer />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >

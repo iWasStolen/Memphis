@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSettings, lsGet, lsSet } from "@/lib/store";
+import { useUI, useSettings, lsGet, lsSet } from "@/lib/store";
+import { proxiedHref } from "@/lib/scramjet";
+import { SEARCH_ENGINES } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft,
@@ -16,44 +18,48 @@ import {
   Globe,
   History as HistoryIcon,
   Search,
+  ShieldCheck,
   ShieldAlert,
   Clock,
+  Loader2,
 } from "lucide-react";
 
 interface Tab {
   id: string;
-  jar: string;
   url: string | null; // raw target url, null = new tab page
   title: string;
   stack: string[];
   idx: number;
+  jar: string; // bump to force iframe reload
 }
 
 const HISTORY_KEY = "memphis-browse-history";
 const QUICK_LINKS = [
-  { name: "Wikipedia", url: "https://en.wikipedia.org", hint: "the free encyclopedia" },
-  { name: "DuckDuckGo", url: "https://lite.duckduckgo.com/lite/", hint: "search" },
+  { name: "Google", url: "https://www.google.com", hint: "search" },
+  { name: "YouTube", url: "https://www.youtube.com", hint: "video" },
+  { name: "Reddit", url: "https://www.reddit.com", hint: "communities" },
+  { name: "Wikipedia", url: "https://en.wikipedia.org", hint: "encyclopedia" },
+  { name: "Spotify", url: "https://open.spotify.com", hint: "music" },
+  { name: "Twitch", url: "https://www.twitch.tv", hint: "live streams" },
   { name: "Hacker News", url: "https://news.ycombinator.com", hint: "tech news" },
-  { name: "example.com", url: "https://example.com", hint: "test page" },
   { name: "Internet Archive", url: "https://archive.org", hint: "public library" },
-  { name: "MDN Docs", url: "https://developer.mozilla.org", hint: "web docs" },
+  { name: "example.com", url: "https://example.com", hint: "test page" },
 ];
 
 function newTab(): Tab {
-  const jar = "j" + Math.random().toString(36).slice(2, 12);
-  return { id: crypto.randomUUID(), jar, url: null, title: "New tab", stack: [], idx: -1 };
-}
-
-function normalizeInput(input: string): string {
-  const t = input.trim();
-  if (!t) return "";
-  if (/^https?:\/\//i.test(t)) return t;
-  if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/.*)?$/.test(t)) return "https://" + t;
-  return `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(t)}`;
+  return {
+    id: crypto.randomUUID(),
+    url: null,
+    title: "New tab",
+    stack: [],
+    idx: -1,
+    jar: crypto.randomUUID(),
+  };
 }
 
 export default function BrowseView() {
   const { settings } = useSettings();
+  const { proxyTarget, clearProxyTarget, proxyState, proxyError } = useUI();
   const [tabs, setTabs] = useState<Tab[]>([newTab()]);
   const [activeId, setActiveId] = useState<string>("");
   const [addr, setAddr] = useState("");
@@ -66,15 +72,9 @@ export default function BrowseView() {
   const loadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const active = tabs.find((t) => t.id === activeId) ?? tabs[0];
-  const proxyBase = settings.proxyBase?.trim()
-    ? settings.proxyBase.replace(/\/$/, "")
-    : "";
 
-  const toProxied = useCallback(
-    (url: string, jar: string) =>
-      `${proxyBase || ""}/api/proxy?u=${encodeURIComponent(url)}&s=${encodeURIComponent(jar)}`,
-    [proxyBase]
-  );
+  /* encoded iframe source for the active tab */
+  const [frameSrc, setFrameSrc] = useState<string>("");
 
   useEffect(() => {
     if (!activeId && tabs[0]) setActiveId(tabs[0].id);
@@ -84,34 +84,40 @@ export default function BrowseView() {
     setHistory(lsGet(HISTORY_KEY, []));
   }, []);
 
-  /* reflect active tab url in address bar */
+  /* compute the scramjet-encoded src whenever the active tab url changes */
   useEffect(() => {
-    setAddr(active?.url ?? "");
-  }, [active?.url, activeId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* listen for location reports from proxied pages */
-  useEffect(() => {
-    const onMsg = (e: MessageEvent) => {
-      const d = e.data;
-      if (!d || d.__memphis !== true) return;
-      setTabs((cur) =>
-        cur.map((t) =>
-          t.jar === d.jar
-            ? { ...t, title: d.title || t.title, url: d.url || t.url }
-            : t
-        )
-      );
-      if (d.url && d.title) {
-        const h = lsGet<typeof history>(HISTORY_KEY, []).filter(
-          (x) => x.url !== d.url
-        );
-        h.unshift({ url: d.url, title: d.title, at: Date.now() });
-        lsSet(HISTORY_KEY, h.slice(0, 100));
+    let cancelled = false;
+    if (!active?.url) {
+      setFrameSrc("");
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    (async () => {
+      try {
+        const href = await proxiedHref(active.url);
+        if (!cancelled) setFrameSrc(href);
+      } catch {
+        if (!cancelled) {
+          setFrameSrc("");
+          setLoading(false);
+        }
       }
+    })();
+    if (loadTimer.current) clearTimeout(loadTimer.current);
+    loadTimer.current = setTimeout(() => setLoading(false), 12000);
+    return () => {
+      cancelled = true;
     };
-    window.addEventListener("message", onMsg);
-    return () => window.removeEventListener("message", onMsg);
-  }, []);
+  }, [active?.url, active?.jar, activeId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* open targets pushed by Apps / Listen / Watch */
+  useEffect(() => {
+    if (!proxyTarget) return;
+    navigate(proxyTarget.url);
+    clearProxyTarget();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proxyTarget?.nonce]);
 
   /* Ctrl+L focuses the address bar */
   useEffect(() => {
@@ -126,22 +132,41 @@ export default function BrowseView() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const navigate = (rawUrl: string, tabId = activeId, pushHistory = true) => {
+  function normalizeInput(input: string): string {
+    const t = input.trim();
+    if (!t) return "";
+    if (/^https?:\/\//i.test(t)) return t;
+    if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/.*)?$/.test(t)) return "https://" + t;
+    const engine =
+      SEARCH_ENGINES.find((e) => e.id === settings.searchEngine) ?? SEARCH_ENGINES[0];
+    return engine.url.replace("%s", encodeURIComponent(t));
+  }
+
+  const recordHistory = (url: string) => {
+    const h = lsGet<typeof history>(HISTORY_KEY, []).filter((x) => x.url !== url);
+    h.unshift({ url, title: url.replace(/^https?:\/\/(www\.)?/, "").split("/")[0], at: Date.now() });
+    lsSet(HISTORY_KEY, h.slice(0, 100));
+    setHistory(h.slice(0, 100));
+  };
+
+  const navigate = (rawUrl: string, tabId?: string, pushHistory = true) => {
     const url = normalizeInput(rawUrl);
     if (!url) return;
+    /* resolve the target tab — on first mount activeId is still empty */
+    const target = tabId || activeId || tabs[0]?.id;
+    if (!target) return;
     setTabs((cur) =>
       cur.map((t) => {
-        if (t.id !== tabId) return t;
+        if (t.id !== target) return t;
         if (pushHistory) {
           const stack = [...t.stack.slice(0, t.idx + 1), url];
-          return { ...t, url, stack, idx: stack.length - 1, title: url };
+          return { ...t, url, stack, idx: stack.length - 1, title: url.replace(/^https?:\/\/(www\.)?/, "").split("/")[0] };
         }
-        return { ...t, url, title: url };
+        return { ...t, url };
       })
     );
+    recordHistory(url);
     setLoading(true);
-    if (loadTimer.current) clearTimeout(loadTimer.current);
-    loadTimer.current = setTimeout(() => setLoading(false), 8000);
   };
 
   const go = () => navigate(addr);
@@ -168,9 +193,7 @@ export default function BrowseView() {
     if (!active?.url) return;
     setLoading(true);
     setTabs((cur) =>
-      cur.map((t) =>
-        t.id === active.id ? { ...t, jar: "j" + Math.random().toString(36).slice(2, 12) } : t
-      )
+      cur.map((t) => (t.id === active.id ? { ...t, jar: crypto.randomUUID() } : t))
     );
   };
 
@@ -214,6 +237,16 @@ export default function BrowseView() {
     setHistory([]);
     setShowHistory(false);
   };
+
+  const openProxiedNewTab = useCallback(async () => {
+    if (!active?.url) return;
+    try {
+      const href = await proxiedHref(active.url);
+      window.open(href, "_blank");
+    } catch {
+      /* boot not ready */
+    }
+  }, [active?.url]);
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -319,7 +352,7 @@ export default function BrowseView() {
             onKeyDown={(e) => {
               if (e.key === "Enter") go();
             }}
-            placeholder="Search or enter address"
+            placeholder={`Search ${SEARCH_ENGINES.find((e) => e.id === settings.searchEngine)?.label ?? "the web"} or enter address`}
             aria-label="Address bar"
             spellCheck={false}
             className="w-full h-9 rounded-full bg-[#050505] border border-[#1f1f1f] pl-9 pr-3 text-[13px] text-white placeholder:text-[#555] outline-none focus:border-[#3a3a3a] focus:ring-1 focus:ring-white/20"
@@ -362,8 +395,7 @@ export default function BrowseView() {
               <div className="max-h-72 overflow-y-auto">
                 {history.length === 0 ? (
                   <p className="text-xs text-[#666] px-2 py-3">
-                    Nothing yet — pages you visit appear here (stored locally
-                    only).
+                    Nothing yet — pages you open appear here (stored locally only).
                   </p>
                 ) : (
                   history.slice(0, 20).map((h, i) => (
@@ -393,16 +425,9 @@ export default function BrowseView() {
             variant="ghost"
             size="icon"
             className="text-[#9a9a9a] hover:text-white hover:bg-[#101010] size-8"
-            onClick={() => {
-              if (
-                window.confirm(
-                  "Open this site directly in a new tab? This leaves Memphis and reveals the address to your browser history."
-                )
-              )
-                window.open(active.url, "_blank");
-            }}
-            aria-label="Open outside Memphis"
-            title="Open outside Memphis"
+            onClick={() => void openProxiedNewTab()}
+            aria-label="Open in a new browser tab (still proxied)"
+            title="Open in new tab (proxied)"
           >
             <ExternalLink className="size-4" />
           </Button>
@@ -421,16 +446,39 @@ export default function BrowseView() {
 
       {/* viewport */}
       <div ref={viewportRef} className="flex-1 min-h-0 relative bg-black">
-        {active && active.url ? (
+        {active && frameSrc ? (
           <iframe
             key={active.id + active.jar}
-            src={toProxied(active.url, active.jar)}
+            src={frameSrc}
             className="w-full h-full border-0 bg-black"
             title={active.title}
             onLoad={() => setLoading(false)}
-            sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock"
-            allow="autoplay; fullscreen; clipboard-write"
+            allow="autoplay; fullscreen; clipboard-write; encrypted-media; gamepad; xr-spatial-tracking"
           />
+        ) : active?.url ? (
+          /* booting the engine or proxy error */
+          <div className="h-full flex flex-col items-center justify-center gap-4 text-center px-6">
+            {proxyState === "error" ? (
+              <>
+                <ShieldAlert className="size-10 text-white" />
+                <h2 className="text-base font-semibold text-white">Proxy engine failed to start</h2>
+                <p className="text-[13px] text-[#8f8f8f] max-w-md">{proxyError}</p>
+                <Button
+                  onClick={() => window.location.reload()}
+                  className="bg-white text-black hover:bg-[#e0e0e0]"
+                >
+                  <RotateCw className="size-4 mr-2" /> Reload Memphis
+                </Button>
+              </>
+            ) : (
+              <>
+                <Loader2 className="size-8 text-white animate-spin" />
+                <p className="text-[13px] text-[#8f8f8f]">
+                  Starting Scramjet engine ({settings.transport} transport)…
+                </p>
+              </>
+            )}
+          </div>
         ) : (
           /* new tab page */
           <div className="h-full overflow-y-auto">
@@ -440,8 +488,8 @@ export default function BrowseView() {
                   <Globe className="size-5" /> Memphis Browser
                 </div>
                 <p className="text-xs text-[#7a7a7a] mt-2">
-                  Relay engine v1 — private networks blocked, requests rate
-                  limited, cookies isolated per tab.
+                  Scramjet engine · {settings.transport} transport · full JS/WebSocket support ·
+                  sites render exactly as they would directly.
                 </p>
               </div>
               <form
@@ -455,7 +503,7 @@ export default function BrowseView() {
                 <input
                   value={addr}
                   onChange={(e) => setAddr(e.target.value)}
-                  placeholder="Search DuckDuckGo or type a URL"
+                  placeholder={`Search ${SEARCH_ENGINES.find((e) => e.id === settings.searchEngine)?.label ?? "the web"} or type a URL`}
                   aria-label="Search or enter address"
                   className="w-full h-12 rounded-full bg-[#050505] border border-[#1f1f1f] pl-11 pr-4 text-sm text-white placeholder:text-[#555] outline-none focus:border-[#3a3a3a]"
                 />
@@ -496,15 +544,19 @@ export default function BrowseView() {
       {/* status strip */}
       <div className="flex items-center gap-3 px-3 h-7 border-t border-[#141414] text-[10px] text-[#555] font-mono shrink-0">
         <span className="flex items-center gap-1">
-          <ShieldAlert className="size-3" />
-          SSRF-guarded relay
+          {proxyState === "ready" ? (
+            <ShieldCheck className="size-3 text-white" />
+          ) : (
+            <ShieldAlert className="size-3" />
+          )}
+          scramjet · {settings.transport}
         </span>
-        <span className="hidden sm:inline">· no WebSockets</span>
-        <span className="hidden sm:inline">· 30 MB / 15 s caps</span>
+        <span className="hidden sm:inline">· wisp relay</span>
+        <span className="hidden sm:inline">· sw active</span>
         <span className="flex-1" />
         <span>
           {active?.url
-            ? `${loading ? "loading…" : "ready"} · ${active.jar}`
+            ? `${loading ? "loading…" : "ready"}`
             : "new tab"}
         </span>
       </div>

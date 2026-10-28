@@ -46,3 +46,35 @@ Work Log:
 
 Stage Summary:
 - All 8 sections complete and browser-verified end-to-end through the Caddy gateway; lint passes with 0 errors; chat-service + Next dev server running; docs delivered.
+
+---
+Task ID: 3
+Agent: main (Z.ai)
+Task: Rework per user feedback — Scramjet proxy (epoxy/libcurl), 2700+ games, 50 real apps, Spotify/YouTube proxied, unlimited GLM AI
+
+Work Log:
+- Researched the official MercuryWorkshop/Scramjet-Demo wiring (scramjet 1.1.0 release tgz + bare-mux 2.1.9 + libcurl-transport 1.5.2 + wisp-js 0.4.1)
+- Vendored engine to public/: scram/ (scramjet.all.js, bundle, sync, wasm), epoxy/, libcurl/, baremux/; wrote public/sw.js (skipWaiting + clients.claim)
+- Added COOP same-origin + COEP credentialless headers in next.config.ts (SAB for transports; credentialless keeps game embeds/thumbnails alive)
+- New wisp mini-service on :3001 (system DNS via dns_method:"lookup"); gateway route wss://host/wisp/?XTransformPort=3001&/ — the trailing "&/" is REQUIRED (wisp switches to wsproxy mode otherwise)
+- src/lib/scramjet.ts: bootProxy() (controller init BEFORE SW registration — official demo order, prevents partial IDB schema), setProxyTransport() (always re-applies; args differ per transport), encodeUrl via proxiedHref()
+- Removed the old custom relay: api/proxy, lib/proxy-server.ts, api/watch/*, lib/watch.ts, lib/music-engine.ts, components/apps/* (10 educational apps)
+- Games: scripts/fetch-games.mjs pages the GameMonetize public feed (429 backoff, auto-resume, builtin merge fix) → data/games.json = 2,817 real games (2,799 external + 18 builtin), 22 categories; /api/games (q/cat/ids/page/per/sort); Play view rebuilt (search, chips, A–Z, infinite scroll, favorites/recents); player gets scramjet fallback mode
+- Apps: exactly 50 day-use apps (YouTube, Instagram, TikTok, ChatGPT, Gemini, X, Snapchat, Reddit, WhatsApp, Discord, Netflix, Spotify, Gmail, Maps, Roblox...) launched through openInProxy()
+- Listen = full Spotify web player via shared ProxyFrame; Watch = full YouTube via ProxyFrame (fake catalog removed)
+- AI rebuilt: /api/ai/chat streams GLM over SSE (SDK yields raw SSE bytes — parse incrementally), no auth/no quota/no rate limits, sessionId-keyed conversations in Prisma (schema updated + db push), markdown+GFM+Prism rendering, flashcards kept (session-based)
+- Browse rebuilt on scramjet: multi-tab, engine-aware address bar, proxied new-tab, live status strip; fixed first-mount navigate() targeting (activeId empty on mount)
+- Settings: Transport (Epoxy default / libcurl) + search engine choice; footer/home copy updated
+
+Verification (agent-browser, via gateway :81):
+- scramjet online (SW controlling, controller init, transport set)
+- example.com, en.wikipedia.org (1,218 links, images), youtube.com (full app: nav/sign-in/Shorts), open.spotify.com (web player) all render through the proxy
+- epoxy AND libcurl transports both verified proxying live traffic (wisp log shows TCP streams)
+- Play: 2,817 games, search "kart" → 10, Nutty Rush Kart launches from GM CDN
+- AI: 17*23=391 streamed + rendered; conversation persists across reload
+- Apps: 50 cards; YouTube app → Browse through proxy
+- lint: 0 errors
+
+Stage Summary:
+- Proxy = real Scramjet 1.1.0 + self-hosted wisp, epoxy default with working libcurl option
+- 2,817 real games, 50 real apps, Spotify/YouTube proxied, unlimited GLM AI — everything verified in-browser

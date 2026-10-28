@@ -1,29 +1,34 @@
 import { db } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
-import { rateLimit, clientIp } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const DAILY_TOKEN_LIMIT = 6700;
+/* ------------------------------------------------------------
+   /api/ai/chat — Memphis AI, powered by GLM via z-ai-web-dev-sdk
+   - No sign-in, no token quota, no rate limits.
+   - Anonymous browser session owns its conversations.
+   - Streams the reply over SSE, then persists both messages.
+   ------------------------------------------------------------ */
 
-const SYSTEM_BASE = `You are the Memphis Study Portal AI tutor — a patient, encouraging K-12 study assistant.
-Rules:
-- Help students learn: explain step by step, check their reasoning, give hints before answers.
-- Cover math, science, English, social studies, world languages and test prep.
-- Keep answers clear and age-appropriate; use short markdown sections, bullets and worked examples.
-- If asked about something off-topic or unsafe, gently steer back to studying.`;
+const SYSTEM_BASE = `You are Memphis AI — a sharp, friendly, general-purpose assistant built into the Memphis unBLACKed web app.
+You are powered by GLM, and you are completely free with no limits.
+Guidelines:
+- Answer anything: homework, code, creative writing, explanations, planning, chat.
+- Use clean markdown: short sections, bullet lists, tables and fenced code blocks with language tags.
+- Be direct and useful first; add brief context after when it helps.
+- Match the user's language and tone.`;
+
+const MAX_MESSAGE = 8000;
+const HISTORY_TURNS = 30; /* messages of context (bounded, not limited per day) */
+
+function validSessionId(s: unknown): s is string {
+  return typeof s === "string" && /^[a-zA-Z0-9_-]{8,64}$/.test(s);
+}
 
 export async function POST(req: Request) {
-  const ip = clientIp(req);
-  if (!rateLimit(`ai:chat:${ip}`, 20, 0.2))
-    return Response.json(
-      { error: "You're sending messages too quickly. Wait a moment." },
-      { status: 429 }
-    );
-
   let body: {
-    conversationId?: string;
+    sessionId?: string;
+    conversationId?: string | null;
     message?: string;
     instructions?: string;
   };
@@ -33,61 +38,48 @@ export async function POST(req: Request) {
     return Response.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  const message = (body.message ?? "").trim().slice(0, 4000);
+  const message = (body.message ?? "").trim().slice(0, MAX_MESSAGE);
   if (!message) return Response.json({ error: "Empty message" }, { status: 400 });
+  if (!validSessionId(body.sessionId))
+    return Response.json({ error: "Invalid session" }, { status: 400 });
 
-  const user = await getSessionUser(req);
-  if (!user)
-    return Response.json(
-      { error: "Sign in to Chat (username + password) to use the AI tutor." },
-      { status: 401 }
-    );
+  const sessionId = body.sessionId;
+  const instructions = (body.instructions ?? "").slice(0, 1000);
 
-  /* daily token quota */
-  const day = new Date().toISOString().slice(0, 10);
-  const usage = await db.aITokenUsage.upsert({
-    where: { userId_day: { userId: user.id, day } },
-    create: { userId: user.id, day, tokens: 0 },
-    update: {},
-  });
-  if (usage.tokens >= DAILY_TOKEN_LIMIT)
-    return Response.json(
-      { error: "Daily token limit reached. The quota resets tomorrow." },
-      { status: 429 }
-    );
-
-  /* find or create conversation */
+  /* find or create the conversation */
   let conversation = body.conversationId
     ? await db.aIConversation.findFirst({
-        where: { id: body.conversationId, userId: user.id },
+        where: { id: body.conversationId, sessionId },
       })
     : null;
+
   if (!conversation) {
     conversation = await db.aIConversation.create({
       data: {
-        userId: user.id,
-        title: message.slice(0, 48),
-        instructions: (body.instructions ?? "").slice(0, 1000),
+        sessionId,
+        title: message.slice(0, 60),
+        instructions,
       },
     });
-  } else if (body.instructions !== undefined) {
+  } else if (body.instructions !== undefined && conversation.instructions !== instructions) {
     await db.aIConversation.update({
       where: { id: conversation.id },
-      data: { instructions: (body.instructions ?? "").slice(0, 1000) },
+      data: { instructions },
     });
   }
 
-  /* history (last 20 turns to bound tokens) */
+  const conversationId = conversation.id;
+
+  /* recent history for context */
   const history = await db.aIMessage.findMany({
-    where: { conversationId: conversation.id },
+    where: { conversationId },
     orderBy: { createdAt: "asc" },
-    take: 40,
+    take: HISTORY_TURNS,
   });
 
-  const systemMsg =
-    body.instructions?.trim()
-      ? `${SYSTEM_BASE}\n\nStudent's custom instructions: ${body.instructions.trim()}`
-      : SYSTEM_BASE;
+  const systemMsg = instructions.trim()
+    ? `${SYSTEM_BASE}\n\nThe user's custom instructions: ${instructions.trim()}`
+    : SYSTEM_BASE;
 
   const messages = [
     { role: "system" as const, content: systemMsg },
@@ -99,53 +91,139 @@ export async function POST(req: Request) {
   ];
 
   await db.aIMessage.create({
-    data: { conversationId: conversation.id, role: "user", content: message },
+    data: { conversationId, role: "user", content: message },
   });
 
-  /* call the model */
-  let reply = "";
-  try {
-    const { default: ZAI } = await import("z-ai-web-dev-sdk");
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages,
-      thinking: { type: "disabled" },
-    });
-    reply =
-      completion?.choices?.[0]?.message?.content ??
-      "(The tutor had trouble answering — try again.)";
-  } catch {
-    return Response.json(
-      { error: "The AI service is unavailable right now. Try again in a moment." },
-      { status: 502 }
-    );
-  }
+  /* stream the model reply */
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: string, data: unknown) => {
+        controller.enqueue(
+          encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+        );
+      };
 
-  const saved = await db.aIMessage.create({
-    data: { conversationId: conversation.id, role: "assistant", content: reply },
-  });
+      send("meta", { conversationId });
 
-  /* token accounting (approx: chars/4) */
-  const used = Math.ceil((message.length + reply.length) / 4);
-  const updatedUsage = await db.aITokenUsage.update({
-    where: { userId_day: { userId: user.id, day } },
-    data: { tokens: { increment: used } },
-  });
+      let reply = "";
+      try {
+        const { default: ZAI } = await import("z-ai-web-dev-sdk");
+        const zai = await ZAI.create();
+        const completion = await zai.chat.completions.create({
+          messages,
+          thinking: { type: "disabled" },
+          stream: true,
+        });
 
-  await db.aIConversation.update({
-    where: { id: conversation.id },
-    data: { updatedAt: new Date() },
-  });
+        const decoder = new TextDecoder();
+        let rawBuf = "";
 
-  return Response.json({
-    conversationId: conversation.id,
-    message: {
-      id: saved.id,
-      role: "assistant",
-      content: reply,
-      createdAt: saved.createdAt,
+        /* the sdk yields raw SSE bytes: data: {"choices":[{"delta":{"content":..}}]} */
+        const consumeLine = (line: string) => {
+          const t = line.trim();
+          if (!t.startsWith("data:")) return;
+          const payload = t.slice(5).trim();
+          if (!payload || payload === "[DONE]") return;
+          try {
+            const obj = JSON.parse(payload) as {
+              choices?: { delta?: { content?: string }; message?: { content?: string } }[];
+            };
+            const delta =
+              obj?.choices?.[0]?.delta?.content ??
+              obj?.choices?.[0]?.message?.content ??
+              "";
+            if (delta) {
+              reply += delta;
+              send("delta", { text: delta });
+            }
+          } catch {
+            /* partial json — ignore */
+          }
+        };
+
+        const consumeBuf = () => {
+          const lines = rawBuf.split("\n");
+          rawBuf = lines.pop() ?? "";
+          for (const line of lines) consumeLine(line);
+        };
+
+        const iterable = completion as AsyncIterable<unknown> | null;
+        if (iterable && typeof (iterable as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function") {
+          for await (const chunk of iterable) {
+            if (chunk instanceof Uint8Array) {
+              rawBuf += decoder.decode(chunk, { stream: true });
+              consumeBuf();
+            } else if (typeof chunk === "string") {
+              rawBuf += chunk;
+              consumeBuf();
+            } else if (chunk && typeof chunk === "object") {
+              /* already-parsed chunk objects */
+              const obj = chunk as {
+                choices?: { delta?: { content?: string }; message?: { content?: string } }[];
+              };
+              const delta =
+                obj?.choices?.[0]?.delta?.content ??
+                obj?.choices?.[0]?.message?.content ??
+                "";
+              if (delta) {
+                reply += delta;
+                send("delta", { text: delta });
+              }
+            }
+          }
+          rawBuf += decoder.decode();
+          consumeBuf();
+        } else {
+          /* non-streaming fallback */
+          const text =
+            (completion as { choices?: { message?: { content?: string } }[] })?.choices?.[0]
+              ?.message?.content ?? "";
+          if (text) {
+            reply = text;
+            send("delta", { text });
+          }
+        }
+
+        if (!reply.trim()) {
+          reply = "(empty response — please try again)";
+          send("delta", { text: reply });
+        }
+      } catch (err) {
+        send("error", {
+          message:
+            err instanceof Error
+              ? `The model is unavailable right now (${err.message}). Try again.`
+              : "The model is unavailable right now. Try again.",
+        });
+        controller.close();
+        return;
+      }
+
+      /* persist the assistant reply */
+      const saved = await db.aIMessage.create({
+        data: { conversationId, role: "assistant", content: reply },
+      });
+      await db.aIConversation.update({
+        where: { id: conversationId },
+        data: { updatedAt: new Date() },
+      });
+
+      send("done", {
+        messageId: saved.id,
+        conversationId,
+        title: conversation.title,
+      });
+      controller.close();
     },
-    tokensUsed: updatedUsage.tokens,
-    tokenLimit: DAILY_TOKEN_LIMIT,
+  });
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    },
   });
 }

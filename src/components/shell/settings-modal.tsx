@@ -504,34 +504,49 @@ export function SettingsModal() {
             )}
 
             {tab === "browse" && (
-              <section aria-label="Browse engine settings">
-                <Row label="Engine" hint="Memphis Engine — built-in relay">
+              <section aria-label="Proxy engine settings">
+                <Row label="Engine" hint="Scramjet 1.1.0 — interception web proxy">
                   <span className="inline-flex items-center gap-1.5 text-xs text-white border border-white px-2 py-1 rounded-md">
-                    <Check className="size-3" /> Memphis v1
+                    <Check className="size-3" /> Scramjet
                   </span>
                 </Row>
                 <Row
                   label="Transport"
-                  hint="Server-side fetch with HTML rewriting and cookie isolation"
+                  hint="How proxied traffic reaches the wisp relay. Epoxy is the default; libcurl impersonates a desktop browser's TLS fingerprint."
                 >
-                  <span className="text-xs text-[#9a9a9a]">memphis-fetch</span>
+                  <ChoiceGroup
+                    value={s.transport}
+                    onChange={(v) => {
+                      set({ transport: v });
+                      toast.success(
+                        v === "epoxy"
+                          ? "Transport switched to epoxy (default)"
+                          : "Transport switched to libcurl"
+                      );
+                    }}
+                    options={[
+                      { value: "epoxy", label: "Epoxy (default)" },
+                      { value: "libcurl", label: "libcurl" },
+                    ]}
+                  />
                 </Row>
-                <Row
-                  label="Custom proxy server"
-                  hint="Route Browse through a compatible Memphis server"
-                >
-                  <Input
-                    value={s.proxyBase}
-                    onChange={(e) => set({ proxyBase: e.target.value })}
-                    placeholder="empty = this server (/api/proxy)"
-                    className="w-56 bg-[#050505] border-[#262626]"
+                <Row label="Search engine" hint="Used by the address bar for queries">
+                  <ChoiceGroup
+                    value={s.searchEngine}
+                    onChange={(v) => set({ searchEngine: v })}
+                    options={[
+                      { value: "duckduckgo", label: "DuckDuckGo" },
+                      { value: "google", label: "Google" },
+                      { value: "bing", label: "Bing" },
+                      { value: "brave", label: "Brave" },
+                    ]}
                   />
                 </Row>
                 <div className="py-3 text-[11px] text-[#666] leading-relaxed border-t border-[#141414]">
-                  The engine blocks private, loopback and link-local
-                  destinations, enforces timeouts, size caps and rate limits,
-                  and strips framing headers so pages can render inside the
-                  app. WebSockets and some JavaScript-heavy apps may not work.
+                  Traffic flows browser → Scramjet service worker → transport (epoxy or
+                  libcurl) → self-hosted wisp relay → destination site. Sites render fully
+                  with JavaScript, WebSockets and logins. The transport applies to new
+                  connections; pages already open keep their existing connection.
                 </div>
               </section>
             )}

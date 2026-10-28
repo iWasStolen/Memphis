@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { useUI, useSettings, applySettings, applyCloak } from "@/lib/store";
+import { bootProxy, setProxyTransport } from "@/lib/scramjet";
 import { Header, Wordmark } from "./header";
 import { Footer } from "./footer";
 import { SettingsModal } from "./settings-modal";
@@ -139,7 +140,7 @@ function ShortcutsModal() {
 /* ---------------- Main shell ---------------- */
 
 export default function AppShell() {
-  const { view, setView, modal, openModal, bootDone, finishBoot } = useUI();
+  const { view, setView, modal, openModal, bootDone, finishBoot, setProxyState } = useUI();
   const settings = useSettings((s) => s.settings);
   const [hydrated, setHydrated] = useState(false);
 
@@ -147,6 +148,39 @@ export default function AppShell() {
   useEffect(() => {
     setHydrated(true);
   }, []);
+
+  /* boot the Scramjet engine (service worker + controller) */
+  useEffect(() => {
+    if (!hydrated) return;
+    let cancelled = false;
+    setProxyState("loading");
+    (async () => {
+      try {
+        await bootProxy();
+        await setProxyTransport(settings.transport);
+        if (!cancelled) {
+          setProxyState("ready");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setProxyState(
+            "error",
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated]);
+
+  /* apply the transport setting whenever it changes after boot */
+  useEffect(() => {
+    if (!hydrated) return;
+    setProxyTransport(settings.transport).catch(() => {});
+  }, [hydrated, settings.transport]);
 
   /* apply settings to DOM whenever they change */
   useEffect(() => {

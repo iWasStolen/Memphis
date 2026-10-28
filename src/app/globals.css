@@ -275,3 +275,55 @@ html[data-reducefx="1"] *::after {
 .u-link:hover {
   text-decoration-color: rgba(255, 255, 255, 0.7);
 }
+
+/* ---------------- markdown (Memphis AI messages) ---------------- */
+.memphis-md > *:first-child { margin-top: 0; }
+.memphis-md > *:last-child { margin-bottom: 0; }
+.memphis-md p { margin: 0.5em 0; }
+.memphis-md h1, .memphis-md h2, .memphis-md h3, .memphis-md h4 {
+  color: #fff;
+  font-weight: 600;
+  margin: 1em 0 0.4em;
+  line-height: 1.3;
+}
+.memphis-md h1 { font-size: 1.25em; }
+.memphis-md h2 { font-size: 1.15em; }
+.memphis-md h3 { font-size: 1.05em; }
+.memphis-md ul, .memphis-md ol { margin: 0.5em 0; padding-left: 1.4em; }
+.memphis-md ul { list-style: disc; }
+.memphis-md ol { list-style: decimal; }
+.memphis-md li { margin: 0.25em 0; }
+.memphis-md li::marker { color: #888; }
+.memphis-md blockquote {
+  border-left: 2px solid #333;
+  padding-left: 0.9em;
+  margin: 0.6em 0;
+  color: #b5b5b5;
+}
+.memphis-md table {
+  border-collapse: collapse;
+  margin: 0.7em 0;
+  font-size: 0.95em;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.memphis-md th, .memphis-md td {
+  border: 1px solid #262626;
+  padding: 5px 10px;
+  text-align: left;
+}
+.memphis-md th { background: #141414; color: #fff; font-weight: 600; }
+.memphis-md tr:nth-child(even) td { background: #0a0a0a; }
+.memphis-md hr { border: 0; border-top: 1px solid #222; margin: 1em 0; }
+.memphis-md pre {
+  background: #0a0a0a;
+  border: 1px solid #1f1f1f;
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-size: 12px;
+  margin: 8px 0;
+}
+.memphis-md code { font-family: var(--font-geist-mono), ui-monospace, monospace; }
+.memphis-md strong { color: #fff; font-weight: 600; }

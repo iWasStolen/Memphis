@@ -1,37 +1,46 @@
 import { db } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
+function validSessionId(s: string | null): boolean {
+  return !!s && /^[a-zA-Z0-9_-]{8,64}$/.test(s);
+}
+
+function sessionFrom(req: Request): string | null {
+  return new URL(req.url).searchParams.get("sessionId");
+}
+
 /**
- * GET /api/ai/conversations/<id> — full message history
+ * GET /api/ai/conversations/<id>?sessionId=... — full message history
  */
 export async function GET(req: Request, ctx: Ctx) {
   const { id } = await ctx.params;
-  const user = await getSessionUser(req);
-  if (!user) return Response.json({ error: "Sign in first" }, { status: 401 });
+  const sessionId = sessionFrom(req);
+  if (!validSessionId(sessionId))
+    return Response.json({ error: "Invalid session" }, { status: 400 });
   const conversation = await db.aIConversation.findFirst({
-    where: { id, userId: user.id },
+    where: { id, sessionId: sessionId! },
   });
   if (!conversation) return Response.json({ error: "Not found" }, { status: 404 });
   const messages = await db.aIMessage.findMany({
     where: { conversationId: id },
     orderBy: { createdAt: "asc" },
-    take: 200,
+    take: 500,
   });
   return Response.json({ conversation, messages });
 }
 
 /**
- * PATCH /api/ai/conversations/<id> — rename / update instructions
+ * PATCH /api/ai/conversations/<id>?sessionId=... — rename / update instructions
  */
 export async function PATCH(req: Request, ctx: Ctx) {
   const { id } = await ctx.params;
-  const user = await getSessionUser(req);
-  if (!user) return Response.json({ error: "Sign in first" }, { status: 401 });
+  const sessionId = sessionFrom(req);
+  if (!validSessionId(sessionId))
+    return Response.json({ error: "Invalid session" }, { status: 400 });
   let body: { title?: string; instructions?: string } = {};
   try {
     body = await req.json();
@@ -39,7 +48,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     return Response.json({ error: "Invalid request" }, { status: 400 });
   }
   const conversation = await db.aIConversation.findFirst({
-    where: { id, userId: user.id },
+    where: { id, sessionId: sessionId! },
   });
   if (!conversation) return Response.json({ error: "Not found" }, { status: 404 });
   const updated = await db.aIConversation.update({
@@ -55,14 +64,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
 }
 
 /**
- * DELETE /api/ai/conversations/<id> — remove a conversation
+ * DELETE /api/ai/conversations/<id>?sessionId=... — remove a conversation
  */
 export async function DELETE(req: Request, ctx: Ctx) {
   const { id } = await ctx.params;
-  const user = await getSessionUser(req);
-  if (!user) return Response.json({ error: "Sign in first" }, { status: 401 });
+  const sessionId = sessionFrom(req);
+  if (!validSessionId(sessionId))
+    return Response.json({ error: "Invalid session" }, { status: 400 });
   const conversation = await db.aIConversation.findFirst({
-    where: { id, userId: user.id },
+    where: { id, sessionId: sessionId! },
   });
   if (!conversation) return Response.json({ error: "Not found" }, { status: 404 });
   await db.aIConversation.delete({ where: { id } });

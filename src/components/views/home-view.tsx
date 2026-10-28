@@ -1,6 +1,6 @@
 "use client";
 
-import { useUI } from "@/lib/store";
+import { useUI, useSettings } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import {
   Gamepad2,
@@ -10,76 +10,81 @@ import {
   Music4,
   Clapperboard,
   Globe,
-  Sigma,
-  BookOpen,
-  FlaskConical,
-  Landmark,
-  Languages,
-  GraduationCap,
   Repeat,
   Accessibility,
+  ShieldCheck,
+  Infinity as InfinityIcon,
+  Zap,
 } from "lucide-react";
 
-const SUBJECTS = [
-  {
-    icon: Sigma,
-    name: "Mathematics",
-    body: "From counting and number sense through pre-algebra, geometry, trigonometry and statistics, up to AP Calculus and beyond. Every skill is mapped to the Common Core State Standards, with diagnostic placement, adaptive question difficulty and spaced review that revisits skills right before you would forget them.",
-  },
-  {
-    icon: BookOpen,
-    name: "English Language Arts",
-    body: "Phonemic awareness and early literacy for the youngest learners, through reading comprehension, vocabulary acquisition, grammar and mechanics, into essay structure, rhetoric, citing evidence and literary analysis at the high school level.",
-  },
-  {
-    icon: FlaskConical,
-    name: "Science",
-    body: "Elementary science practices and phenomena-based units, middle-school physical, life and earth science, and high school Biology, Chemistry, Physics and Environmental Science aligned to the Next Generation Science Standards.",
-  },
-  {
-    icon: Landmark,
-    name: "Social Studies",
-    body: "United States History, World History, Civics and Government, Geography and Economics. Practice sets emphasize sourcing, contextualization, argumentation and document analysis rather than rote recall.",
-  },
-  {
-    icon: Languages,
-    name: "World Languages",
-    body: "Vocabulary and grammar practice for Spanish, French, German, Italian, Portuguese, Mandarin Chinese, Japanese, Korean, Russian, Arabic and Hindi, plus structured ESL skill tracks from beginner to advanced.",
-  },
-  {
-    icon: GraduationCap,
-    name: "Test Preparation",
-    body: "Timed practice for the SAT and ACT with score prediction, AP exam review by unit, and certification preparation for language proficiency exams including speaking and listening drills.",
-  },
+const QUICK = [
+  { icon: Gamepad2, label: "Play", desc: "2,700+ games", view: "play" as const },
+  { icon: Boxes, label: "Apps", desc: "50 real apps", view: "apps" as const },
+  { icon: MessagesSquare, label: "Chat", desc: "Community", view: "chat" as const },
+  { icon: Sparkles, label: "AI", desc: "GLM · free · unlimited", view: "ai" as const },
+  { icon: Music4, label: "Listen", desc: "Spotify", view: "listen" as const },
+  { icon: Clapperboard, label: "Watch", desc: "YouTube", view: "watch" as const },
+  { icon: Globe, label: "Browse", desc: "Scramjet proxy", view: "browse" as const },
 ];
 
-const QUICK = [
-  { icon: Gamepad2, label: "Play", desc: "2,700+ practice games", view: "play" as const },
-  { icon: Boxes, label: "Apps", desc: "Study tools", view: "apps" as const },
-  { icon: MessagesSquare, label: "Chat", desc: "Study groups", view: "chat" as const },
-  { icon: Sparkles, label: "AI", desc: "AI tutor", view: "ai" as const },
-  { icon: Music4, label: "Listen", desc: "Focus music", view: "listen" as const },
-  { icon: Clapperboard, label: "Watch", desc: "Video library", view: "watch" as const },
-  { icon: Globe, label: "Browse", desc: "Web browser", view: "browse" as const },
+const FEATURES = [
+  {
+    icon: Gamepad2,
+    name: "2,700+ embedded games",
+    body: "A full HTML5 arcade: action, racing, puzzle, sports, two-player and .io games streamed from a real game network, plus 18 classics that ship inside the app. Search, filter by category, favorite the ones you love and play fullscreen — every card launches a real, playable game.",
+  },
+  {
+    icon: Boxes,
+    name: "50 day-use apps",
+    body: "YouTube, Instagram, TikTok, ChatGPT, Gemini, Snapchat, Discord, Netflix, Gmail, Maps, Roblox and 39 more — every app opens through the proxy and runs inside the site, exactly as it would in a normal browser tab.",
+  },
+  {
+    icon: Sparkles,
+    name: "Unlimited GLM AI",
+    body: "A real AI chat powered by GLM. No account, no daily quota, no limits — streaming answers with full markdown, code highlighting, saved conversations and custom instructions on every device session.",
+  },
+  {
+    icon: Globe,
+    name: "Scramjet web proxy",
+    body: "The same engine used by the best unblocked sites: Scramjet with a choice of epoxy (default) or libcurl transport, running through a self-hosted wisp relay. Full JavaScript, WebSockets and logins — sites render like the real thing because they are.",
+  },
+  {
+    icon: Music4,
+    name: "Spotify, proxied",
+    body: "The complete Spotify web player running through the engine. Log in, stream your playlists and podcasts, and keep your session — cookies live in the engine's client-side store on your device.",
+  },
+  {
+    icon: Clapperboard,
+    name: "YouTube, proxied",
+    body: "All of YouTube inside the app: trending, subscriptions, search, history and playlists. Videos stream through the relay, so playback keeps working even where the site itself is blocked.",
+  },
 ];
 
 export default function HomeView() {
   const { setView } = useUI();
+  const { proxyState } = useUI();
+  const settings = useSettings((s) => s.settings);
+
   return (
     <div className="flex-1">
       {/* hero */}
       <section className="border-b border-[#141414]">
         <div className="mx-auto max-w-5xl px-4 py-14 sm:py-20 text-center">
-          <p className="mono-label mb-4">Standards-aligned practice · K–12</p>
+          <p className="mono-label mb-4 flex items-center justify-center gap-2">
+            <span
+              className={`inline-block size-1.5 rounded-full ${
+                proxyState === "ready" ? "bg-white" : "bg-[#555]"
+              }`}
+            />
+            scramjet {proxyState === "ready" ? "online" : proxyState} · {settings.transport} transport
+          </p>
           <h1 className="text-3xl sm:text-5xl font-semibold tracking-tight text-white leading-tight">
-            Study Portal
+            Everything, unblocked.
           </h1>
           <p className="mt-5 text-sm sm:text-base text-[#9a9a9a] max-w-2xl mx-auto leading-relaxed">
-            A free practice library for students, teachers and families. Every
-            skill is mapped to the Common Core State Standards, the Next
-            Generation Science Standards, or the relevant state framework —
-            with diagnostic placement, spaced review and printable progress
-            reports.
+            2,700+ embedded games, 50 real apps, Spotify, YouTube and an unlimited
+            GLM-powered AI — all running on a Scramjet proxy that renders the real
+            web inside this page. Pure black and white, nothing else.
           </p>
           <div className="mt-8 flex flex-wrap justify-center gap-3">
             <Button
@@ -87,7 +92,7 @@ export default function HomeView() {
               className="bg-white text-black hover:bg-[#e0e0e0]"
             >
               <Gamepad2 className="size-4 mr-2" />
-              Open practice games
+              Play 2,700+ games
             </Button>
             <Button
               variant="outline"
@@ -95,7 +100,7 @@ export default function HomeView() {
               className="border-[#2a2a2a] text-white hover:bg-[#101010] hover:border-[#3d3d3d]"
             >
               <Sparkles className="size-4 mr-2" />
-              Launch AI tutor
+              Chat with Memphis AI
             </Button>
           </div>
         </div>
@@ -122,71 +127,72 @@ export default function HomeView() {
         </div>
       </section>
 
-      {/* subjects */}
+      {/* features */}
       <section className="border-b border-[#141414]">
         <div className="mx-auto max-w-5xl px-4 py-12">
-          <h2 className="text-lg font-semibold text-white mb-6">
-            What&apos;s inside
-          </h2>
+          <h2 className="text-lg font-semibold text-white mb-6">What&apos;s inside</h2>
           <div className="grid sm:grid-cols-2 gap-x-8 gap-y-8">
-            {SUBJECTS.map((s) => (
+            {FEATURES.map((s) => (
               <article key={s.name}>
                 <div className="flex items-center gap-2.5 mb-2.5">
                   <s.icon className="size-4 text-white" />
                   <h3 className="text-sm font-semibold text-white">{s.name}</h3>
                 </div>
-                <p className="text-[13px] text-[#8f8f8f] leading-relaxed">
-                  {s.body}
-                </p>
+                <p className="text-[13px] text-[#8f8f8f] leading-relaxed">{s.body}</p>
               </article>
             ))}
           </div>
         </div>
       </section>
 
-      {/* how practice works */}
+      {/* how the proxy works */}
       <section className="border-b border-[#141414]">
         <div className="mx-auto max-w-5xl px-4 py-12">
-          <h2 className="text-lg font-semibold text-white mb-6">
-            How practice works
-          </h2>
+          <h2 className="text-lg font-semibold text-white mb-6">How the proxy works</h2>
           <ol className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
             {[
               {
                 n: "01",
-                t: "Diagnostic placement",
-                d: "A short placement check locates each learner's current level within a strand, so practice starts where it is actually needed instead of at page one.",
+                t: "Service worker",
+                d: "A Scramjet service worker takes over the origin and intercepts every encoded request the app makes — no visible address changes, no separate server hop.",
               },
               {
                 n: "02",
-                t: "Adaptive questions",
-                d: "Item difficulty adjusts to accuracy in real time, keeping learners in the productive zone between bored and overwhelmed.",
+                t: "Transport",
+                d: "Traffic flows through epoxy (default) or libcurl. Switch transports any time from Settings; new connections use your choice immediately.",
               },
               {
                 n: "03",
-                t: "Spaced review",
-                d: "Skills resurface on a spaced schedule driven by recall performance, converting short-term familiarity into durable retention.",
+                t: "Wisp relay",
+                d: "The transport multiplexes TCP over a WebSocket to the self-hosted wisp relay, which opens the real connection to the destination site.",
               },
               {
                 n: "04",
-                t: "Progress reports",
-                d: "Teachers and families can view and print standards-mapped progress reports that show growth over time, not just a raw score.",
+                t: "Full rendering",
+                d: "Scramjet rewrites HTML, CSS and JavaScript client-side, so logins, WebSockets, video and audio all behave like the real site.",
               },
             ].map((step) => (
               <li key={step.n}>
-                <div className="font-mono text-[11px] text-[#555] mb-1.5">
-                  {step.n}
-                </div>
+                <div className="font-mono text-[11px] text-[#555] mb-1.5">{step.n}</div>
                 <div className="flex items-center gap-2 mb-1.5">
                   <Repeat className="size-3.5 text-[#8f8f8f]" />
                   <h3 className="text-sm font-semibold text-white">{step.t}</h3>
                 </div>
-                <p className="text-[13px] text-[#8f8f8f] leading-relaxed">
-                  {step.d}
-                </p>
+                <p className="text-[13px] text-[#8f8f8f] leading-relaxed">{step.d}</p>
               </li>
             ))}
           </ol>
+          <div className="mt-8 flex flex-wrap gap-2">
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-[#9a9a9a] border border-[#222] rounded-full px-2.5 py-1">
+              <ShieldCheck className="size-3" /> scramjet 1.1.0
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-[#9a9a9a] border border-[#222] rounded-full px-2.5 py-1">
+              <Zap className="size-3" /> epoxy · libcurl
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-[#9a9a9a] border border-[#222] rounded-full px-2.5 py-1">
+              <InfinityIcon className="size-3" /> GLM — free & unlimited
+            </span>
+          </div>
         </div>
       </section>
 
@@ -198,12 +204,11 @@ export default function HomeView() {
             <h2 className="text-lg font-semibold text-white">Accessibility</h2>
           </div>
           <p className="text-[13px] text-[#8f8f8f] leading-relaxed max-w-3xl">
-            The portal is built to be usable by everyone: full keyboard
-            navigation with visible focus indicators, screen-reader labels on
-            every control, adjustable text size and typeface, a high-contrast
-            monochrome display, reduced-motion support, and extended-time
-            options for timed practice. If something is hard to use, report it
-            from the footer and we will fix it.
+            Built to be usable by everyone: full keyboard navigation with visible
+            focus indicators, screen-reader labels on every control, adjustable
+            text size and typeface, a high-contrast monochrome display, and
+            reduced-motion support. If something is hard to use, report it from
+            the footer and it gets fixed.
           </p>
         </div>
       </section>

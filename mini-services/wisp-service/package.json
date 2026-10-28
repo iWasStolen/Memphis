@@ -1,0 +1,13 @@
+{
+  "name": "memphis-wisp-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted wisp relay for the Memphis unBLACKed Scramjet proxy (port 3001)",
+  "scripts": {
+    "dev": "bun --hot index.ts",
+    "start": "bun index.ts"
+  },
+  "dependencies": {
+    "@mercuryworkshop/wisp-js": "^0.4.1"
+  }
+}

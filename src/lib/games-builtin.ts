@@ -1,20 +1,24 @@
-import { GameDef } from "./types";
-
 /* ============================================================
-   Memphis unBLACKed game catalog
-   - builtin: games that ship with the app (canvas/DOM)
-   - embed:   open-source games loaded from their official pages
+   Memphis unBLACKed — built-in & open-source games that ship
+   with the app. The big external catalog lives in
+   data/games.json (see scripts/fetch-games.mjs).
    ============================================================ */
 
-export const GAMES: GameDef[] = [
-  // ---------- builtin ----------
+export interface BuiltinGameDef {
+  id: string;
+  name: string;
+  category: "arcade" | "puzzle" | "classic" | "action" | "casual";
+  builtin?: boolean;
+  embedUrl?: string;
+  desc: string;
+}
+
+export const BUILTIN_GAMES: BuiltinGameDef[] = [
   {
     id: "2048",
     name: "2048",
     category: "puzzle",
     builtin: true,
-    hasScore: true,
-    scoreLabel: "points",
     desc: "Slide and merge tiles to reach 2048. Arrows or swipe.",
   },
   {
@@ -22,8 +26,6 @@ export const GAMES: GameDef[] = [
     name: "Snake",
     category: "classic",
     builtin: true,
-    hasScore: true,
-    scoreLabel: "apples",
     desc: "Eat, grow, don't bite yourself. Arrows or swipe.",
   },
   {
@@ -31,8 +33,6 @@ export const GAMES: GameDef[] = [
     name: "Tetris",
     category: "classic",
     builtin: true,
-    hasScore: true,
-    scoreLabel: "points",
     desc: "Stack falling blocks and clear lines. Arrows to move, up to rotate.",
   },
   {
@@ -40,8 +40,6 @@ export const GAMES: GameDef[] = [
     name: "Minesweeper",
     category: "puzzle",
     builtin: true,
-    hasScore: true,
-    scoreLabel: "seconds (lower is better)",
     desc: "Reveal every safe tile. Right-click or long-press to flag mines.",
   },
   {
@@ -49,8 +47,6 @@ export const GAMES: GameDef[] = [
     name: "Breakout",
     category: "arcade",
     builtin: true,
-    hasScore: true,
-    scoreLabel: "points",
     desc: "Bounce the ball, clear the wall. Mouse, touch or arrows.",
   },
   {
@@ -58,8 +54,6 @@ export const GAMES: GameDef[] = [
     name: "Flappy",
     category: "arcade",
     builtin: true,
-    hasScore: true,
-    scoreLabel: "pipes",
     desc: "Tap or press space to flap through the gaps.",
   },
   {
@@ -67,8 +61,6 @@ export const GAMES: GameDef[] = [
     name: "Pong",
     category: "classic",
     builtin: true,
-    hasScore: true,
-    scoreLabel: "rally wins",
     desc: "First paddle to 7 points takes the match. Mouse, touch or W/S.",
   },
   {
@@ -76,8 +68,6 @@ export const GAMES: GameDef[] = [
     name: "Memory Match",
     category: "puzzle",
     builtin: true,
-    hasScore: true,
-    scoreLabel: "points",
     desc: "Find all eight pairs. Fewer moves, more points.",
   },
   {
@@ -85,8 +75,6 @@ export const GAMES: GameDef[] = [
     name: "Tic-Tac-Toe",
     category: "classic",
     builtin: true,
-    hasScore: true,
-    scoreLabel: "points",
     desc: "Beat the unbeatable-ish AI three times in a row.",
   },
   {
@@ -94,8 +82,6 @@ export const GAMES: GameDef[] = [
     name: "Simon",
     category: "puzzle",
     builtin: true,
-    hasScore: true,
-    scoreLabel: "rounds",
     desc: "Repeat the growing light pattern.",
   },
   {
@@ -103,8 +89,6 @@ export const GAMES: GameDef[] = [
     name: "Asteroids",
     category: "action",
     builtin: true,
-    hasScore: true,
-    scoreLabel: "points",
     desc: "Rotate, thrust and blast rocks. Arrows + space, touch controls on mobile.",
   },
   {
@@ -112,11 +96,8 @@ export const GAMES: GameDef[] = [
     name: "Void Clicker",
     category: "casual",
     builtin: true,
-    hasScore: true,
-    scoreLabel: "total voids",
     desc: "Click the void. Buy matter. Ascend.",
   },
-  // ---------- embedded open-source ----------
   {
     id: "trex",
     name: "T-Rex Runner",
@@ -160,18 +141,3 @@ export const GAMES: GameDef[] = [
     desc: "A WebGL racing game by Thibaut Despoulain.",
   },
 ];
-
-export const GAME_CATEGORIES: { id: "all" | GameDef["category"] | "favorites" | "recent"; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "arcade", label: "Arcade" },
-  { id: "puzzle", label: "Puzzle" },
-  { id: "classic", label: "Classic" },
-  { id: "action", label: "Action" },
-  { id: "casual", label: "Casual" },
-  { id: "favorites", label: "Favorites" },
-  { id: "recent", label: "Recent" },
-];
-
-export function getGame(id: string): GameDef | undefined {
-  return GAMES.find((g) => g.id === id);
-}

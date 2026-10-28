@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { GameDef } from "@/lib/types";
 import { useUI, lsGet, lsSet } from "@/lib/store";
+import { proxiedHref } from "@/lib/scramjet";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import {
@@ -43,10 +44,6 @@ const BUILTIN: Record<string, React.ComponentType> = {
   clicker: Clicker,
 };
 
-function proxify(url: string) {
-  return `/api/proxy?u=${encodeURIComponent(url)}`;
-}
-
 export function GamePlayer({
   game,
   onClose,
@@ -56,6 +53,7 @@ export function GamePlayer({
 }) {
   const { setReportTarget, openModal } = useUI();
   const [embedMode, setEmbedMode] = useState<"direct" | "proxy">("direct");
+  const [proxySrc, setProxySrc] = useState("");
   const [loadFailed, setLoadFailed] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [fav, setFav] = useState(false);
@@ -113,6 +111,22 @@ export function GamePlayer({
     setLoadFailed(false);
     setReloadKey((k) => k + 1);
   };
+
+  /* encode the game url through the scramjet engine when proxy mode is on */
+  useEffect(() => {
+    if (embedMode !== "proxy" || !game.url) return;
+    let cancelled = false;
+    proxiedHref(game.url)
+      .then((href) => {
+        if (!cancelled) setProxySrc(href);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [embedMode, game.url]);
 
   const Builtin = game.builtin ? BUILTIN[game.id] : null;
 
@@ -222,7 +236,7 @@ export function GamePlayer({
               <Button
                 variant="outline"
                 className="border-[#2a2a2a] text-white hover:bg-[#101010]"
-                onClick={() => window.open(game.embedUrl, "_blank")}
+                onClick={() => window.open(game.url, "_blank")}
               >
                 <ExternalLink className="size-4 mr-2" /> Open source site
               </Button>
@@ -231,7 +245,7 @@ export function GamePlayer({
         ) : (
           <iframe
             key={`${embedMode}-${reloadKey}`}
-            src={embedMode === "proxy" ? proxify(game.embedUrl!) : game.embedUrl}
+            src={embedMode === "proxy" ? proxySrc : game.url}
             className="w-full h-full border-0 bg-black"
             title={game.name}
             allow="fullscreen; autoplay; gamepad; clipboard-write"
