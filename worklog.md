@@ -132,3 +132,24 @@ Work Log:
 
 Stage Summary:
 - $scramjet IndexedDB is now self-healing at boot and race-proof at the SW layer; both transports serve real pages end-to-end through the gateway topology
+
+---
+Task ID: 6
+Agent: main (Z.ai)
+Task: Fix React hydration mismatch — "A tree hydrated but some attributes of the server rendered HTML didn't match"
+
+Work Log:
+- Reproduced on a CLEAN fresh profile (not a stale-tab artifact): server HTML head = [shim, scramjet.all.js (defer), baremux (defer), polyfill-nomodule], but live DOM = [shim, baremux, polyfill-nomodule] — the scramjet script node vanished
+- Root cause: vendored scramjet.all.js ends with `"document" in globalThis && document?.currentScript && document.currentScript.remove()` — the bundle DELETES ITS OWN <script> TAG after executing (designed for dynamic injection). React then hydrates the head against a DOM that no longer matches the server HTML → structural mismatch; the aria-controls/radix-_R_ ID diff in the same report was a downstream symptom of the failed hydration (useId regenerated client-side)
+- Fix:
+  1. layout.tsx: removed the static <script src="/scram/scramjet.all.js" defer>; added <link rel="preload" as="script" href="/scram/scramjet.all.js"> (180KB bundle stays warm; preload link is hydration-stable — nothing removes it). baremux + shim stay static (neither self-removes)
+  2. scramjet.ts: ensureScramjetBundle rewritten — no more grace-wait for the (now nonexistent) static tag; loads dynamically on first bootProxy() via loadScript(), single-flight promise, resets on failure so Retry re-injects a fresh tag
+- Verified (agent-browser, fresh profiles, gateway :81):
+  - Fresh load: 0 page errors, 0 hydration warnings
+  - Head after load: preload + shim + baremux present, no scramjet tag (self-removed post-execution by design), engineGlobal/bareMuxGlobal/proxyReady all true, SW controlling
+  - Preload actually used: resource entry initiator=link, single 65KB (gzip) fetch
+  - Proxy E2E: example.com renders real live content through /scramjet/ frame
+  - Reload with SW active: still 0 hydration errors; radix aria-controls ID now matches server (radix-_R_2eatmlb_) — confirms the ID mismatch was a symptom, not a separate bug
+
+Stage Summary:
+- Hydration is now clean; the self-removing Scramjet bundle is loaded dynamically post-hydration with a preload hint so proxy boot speed is unchanged

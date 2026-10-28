@@ -41,8 +41,13 @@ export default function RootLayout({
             before every other script; blocking on purpose, it is tiny */}
         {/* eslint-disable-next-line @next/next/no-sync-scripts */}
         <script src="/sharedworker-shim.js" />
-        {/* Scramjet proxy engine (page context) + bare-mux transport manager */}
-        <script src="/scram/scramjet.all.js" defer />
+        {/* Scramjet engine is NOT statically rendered: the bundle deletes its
+            own <script> tag after executing (document.currentScript.remove()),
+            which would leave React hydrating a head that no longer matches
+            the server HTML. It is injected dynamically in bootProxy();
+            this preload keeps the 180KB bundle warm so boot stays fast. */}
+        <link rel="preload" as="script" href="/scram/scramjet.all.js" />
+        {/* bare-mux transport manager (does not self-remove — safe to SSR) */}
         <script src="/baremux/index.js" defer />
       </head>
       <body

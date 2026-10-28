@@ -104,22 +104,25 @@ function loadScript(src: string): Promise<void> {
   });
 }
 
-/** Make sure the scramjet controller bundle is present; re-inject if the
-    static tag failed (Retry path — a failed <script> never re-runs). */
-let scramjetWaited = false;
-async function ensureScramjetBundle(): Promise<void> {
-  if (window.$scramjetLoadController) return;
-  if (!scramjetWaited) {
-    /* first attempt: give the static defer tag a fair chance
-       (longer while the page is still loading) */
-    scramjetWaited = true;
-    const grace = document.readyState === "complete" ? 6000 : 12000;
-    await waitFor(() => !!window.$scramjetLoadController, grace, "scramjet controller bundle").catch(() => {});
-    if (window.$scramjetLoadController) return;
+/** Load the scramjet controller bundle on demand. The bundle deletes its
+    own <script> tag after executing (document.currentScript.remove()), so
+    it must never be statically SSR'd — React hydration would fail on the
+    missing head node. A <link rel="preload"> in the layout keeps it warm. */
+let scramjetLoadPromise: Promise<void> | null = null;
+function ensureScramjetBundle(): Promise<void> {
+  if (window.$scramjetLoadController) return Promise.resolve();
+  if (!scramjetLoadPromise) {
+    scramjetLoadPromise = loadScript("/scram/scramjet.all.js")
+      .then(() =>
+        waitFor(() => !!window.$scramjetLoadController, 4000, "scramjet controller bundle")
+      )
+      .catch((err) => {
+        /* allow Retry to inject a fresh tag — a failed <script> never re-runs */
+        scramjetLoadPromise = null;
+        throw err;
+      });
   }
-  /* static tag failed or a later retry — load it ourselves */
-  await loadScript("/scram/scramjet.all.js");
-  await waitFor(() => !!window.$scramjetLoadController, 4000, "scramjet controller bundle");
+  return scramjetLoadPromise;
 }
 
 /** Make sure the bare-mux client is present; re-inject if needed. */
@@ -357,8 +360,9 @@ export function bootProxy(): Promise<ProxyHandle> {
   if (bootPromise) return bootPromise;
 
   bootPromise = (async () => {
-    /* stage 1 — wait for the vendored bundles; re-inject if the static tag
-       was blocked (ad-blocker, filter, flaky network) so Retry can recover */
+    /* stage 1 — load the engine bundle (dynamically — it self-removes its
+       tag, so it can't be SSR'd; a preload link in the layout keeps it warm).
+       A blocked/failed load is retriable via the Retry button */
     try {
       await ensureScramjetBundle();
     } catch (err) {
