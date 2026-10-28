@@ -325,6 +325,20 @@ export async function relay(
     const jar = jarFor(jarId);
     const headers: Record<string, string> = {};
     for (const h of HOP_HEADERS) {
+      if (h === "origin") continue; /* never leak the proxy origin */
+      if (h === "referer") {
+        /* only forward same-site referers (sub-resources), else drop */
+        const ref = req.headers.get(h);
+        if (ref) {
+          try {
+            const refHost = new URL(ref).hostname;
+            if (refHost === url.hostname) headers[h] = ref;
+          } catch {
+            /* invalid referer — drop */
+          }
+        }
+        continue;
+      }
       const v = req.headers.get(h);
       if (v) headers[h] = v;
     }

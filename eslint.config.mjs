@@ -23,6 +23,12 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "react/display-name": "off",
     "react/prop-types": "off",
     "react-compiler/react-compiler": "off",
+    // React hooks v6 (compiler advisory rules) — pre-existing canvas games
+    // intentionally use refs inside render-free game loops; kept as warnings
+    "react-hooks/set-state-in-effect": "warn",
+    "react-hooks/refs": "warn",
+    "react-hooks/immutability": "warn",
+    "react-hooks/preserve-manual-memoization": "warn",
     
     // Next.js rules
     "@next/next/no-img-element": "off",

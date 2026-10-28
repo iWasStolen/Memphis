@@ -33,6 +33,33 @@ const CATEGORIES: Record<string, { units: string[]; factors: Record<string, numb
   },
 };
 
+function UnitSelect({
+  val,
+  onChange,
+  ariaLabel,
+  units,
+}: {
+  val: string;
+  onChange: (v: string) => void;
+  ariaLabel: string;
+  units: string[];
+}) {
+  return (
+    <select
+      value={val}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label={ariaLabel}
+      className="bg-[#050505] border border-[#262626] rounded-md px-3 py-2.5 text-sm text-white outline-none focus:border-[#3a3a3a]"
+    >
+      {units.map((u) => (
+        <option key={u} value={u}>
+          {u}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export default function UnitConverter() {
   const [cat, setCat] = useState("Length");
   const isTemp = cat === "Temperature";
@@ -53,9 +80,7 @@ export default function UnitConverter() {
     }
   };
 
-  const units = isTemp
-    ? ["°C", "°F", "K"]
-    : CATEGORIES[cat].units;
+  const units = isTemp ? ["°C", "°F", "K"] : CATEGORIES[cat].units;
 
   const toCelsius = (v: number, u: string) =>
     u === "°C" ? v : u === "°F" ? ((v - 32) * 5) / 9 : v - 273.15;
@@ -76,29 +101,6 @@ export default function UnitConverter() {
       return result.toExponential(6);
     return String(Math.round(result * 1e8) / 1e8);
   };
-
-  const Select = ({
-    val,
-    onChange,
-    ariaLabel,
-  }: {
-    val: string;
-    onChange: (v: string) => void;
-    ariaLabel: string;
-  }) => (
-    <select
-      value={val}
-      onChange={(e) => onChange(e.target.value)}
-      aria-label={ariaLabel}
-      className="bg-[#050505] border border-[#262626] rounded-md px-3 py-2.5 text-sm text-white outline-none focus:border-[#3a3a3a]"
-    >
-      {units.map((u) => (
-        <option key={u} value={u}>
-          {u}
-        </option>
-      ))}
-    </select>
-  );
 
   return (
     <div className="max-w-xl mx-auto p-4">
@@ -129,7 +131,7 @@ export default function UnitConverter() {
               className="w-full bg-black border border-[#262626] rounded-md px-3 py-2.5 text-lg font-mono text-white outline-none focus:border-[#3a3a3a]"
             />
             <div className="mt-2">
-              <Select val={from} onChange={setFrom} ariaLabel="From unit" />
+              <UnitSelect val={from} onChange={setFrom} ariaLabel="From unit" units={units} />
             </div>
           </div>
           <div className="hidden sm:block pb-24 text-center text-[#555] font-mono">→</div>
@@ -143,7 +145,7 @@ export default function UnitConverter() {
               {convert()}
             </div>
             <div className="mt-2">
-              <Select val={to} onChange={setTo} ariaLabel="To unit" />
+              <UnitSelect val={to} onChange={setTo} ariaLabel="To unit" units={units} />
             </div>
           </div>
         </div>
