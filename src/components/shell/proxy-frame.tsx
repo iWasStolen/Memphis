@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useUI } from "@/lib/store";
-import { proxiedHref } from "@/lib/scramjet";
+import { proxiedHref, resetProxy } from "@/lib/scramjet";
 import { Button } from "@/components/ui/button";
 import { Loader2, Maximize2, Minimize, RotateCw, ExternalLink, ShieldAlert } from "lucide-react";
 
@@ -23,7 +23,7 @@ export function ProxyFrame({
   allow?: string;
   className?: string;
 }) {
-  const { proxyState, proxyError } = useUI();
+  const { proxyState, proxyError, proxyStage, proxyDiag, retryProxy } = useUI();
   const [src, setSrc] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
   const [fullscreen, setFullscreen] = useState(false);
@@ -32,6 +32,7 @@ export function ProxyFrame({
   useEffect(() => {
     let cancelled = false;
     setSrc("");
+    if (proxyState === "error") return; /* don't hammer a broken engine */
     proxiedHref(url)
       .then((href) => {
         if (!cancelled) setSrc(href);
@@ -40,7 +41,7 @@ export function ProxyFrame({
     return () => {
       cancelled = true;
     };
-  }, [url, reloadKey]);
+  }, [url, reloadKey, proxyState]);
 
   const toggleFullscreen = async () => {
     if (!boxRef.current) return;
@@ -113,8 +114,22 @@ export function ProxyFrame({
               <>
                 <ShieldAlert className="size-8 text-white" />
                 <p className="text-[13px] text-[#8f8f8f] max-w-sm">
-                  The proxy engine failed to start: {proxyError}
+                  {proxyStage === "transport" ? "The proxy transport failed" : "The proxy engine failed to start"}
+                  : {proxyError}
                 </p>
+                {proxyDiag && (
+                  <p className="text-[11px] text-[#555] font-mono max-w-sm">{proxyDiag}</p>
+                )}
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    resetProxy();
+                    retryProxy();
+                  }}
+                  className="bg-white text-black hover:bg-[#e0e0e0]"
+                >
+                  <RotateCw className="size-3.5 mr-2" /> Retry
+                </Button>
               </>
             ) : (
               <>

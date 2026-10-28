@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useUI, useSettings, lsGet, lsSet } from "@/lib/store";
-import { proxiedHref } from "@/lib/scramjet";
+import { proxiedHref, resetProxy } from "@/lib/scramjet";
 import { SEARCH_ENGINES } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -59,7 +59,7 @@ function newTab(): Tab {
 
 export default function BrowseView() {
   const { settings } = useSettings();
-  const { proxyTarget, clearProxyTarget, proxyState, proxyError } = useUI();
+  const { proxyTarget, clearProxyTarget, proxyState, proxyError, proxyStage, proxyDiag, retryProxy } = useUI();
   const [tabs, setTabs] = useState<Tab[]>([newTab()]);
   const [activeId, setActiveId] = useState<string>("");
   const [addr, setAddr] = useState("");
@@ -92,10 +92,17 @@ export default function BrowseView() {
       setLoading(false);
       return;
     }
+    if (proxyState === "error") {
+      /* show the error screen instead of hammering a broken engine */
+      setFrameSrc("");
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    const target = active.url; /* narrowed copy for the async closure */
     (async () => {
       try {
-        const href = await proxiedHref(active.url);
+        const href = await proxiedHref(target);
         if (!cancelled) setFrameSrc(href);
       } catch {
         if (!cancelled) {
@@ -109,14 +116,14 @@ export default function BrowseView() {
     return () => {
       cancelled = true;
     };
-  }, [active?.url, active?.jar, activeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [active?.url, active?.jar, activeId, proxyState]);
 
   /* open targets pushed by Apps / Listen / Watch */
   useEffect(() => {
     if (!proxyTarget) return;
     navigate(proxyTarget.url);
     clearProxyTarget();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [proxyTarget?.nonce]);
 
   /* Ctrl+L focuses the address bar */
@@ -461,14 +468,35 @@ export default function BrowseView() {
             {proxyState === "error" ? (
               <>
                 <ShieldAlert className="size-10 text-white" />
-                <h2 className="text-base font-semibold text-white">Proxy engine failed to start</h2>
+                <h2 className="text-base font-semibold text-white">
+                  {proxyStage === "transport" ? "Proxy transport failed" : "Proxy engine failed to start"}
+                </h2>
                 <p className="text-[13px] text-[#8f8f8f] max-w-md">{proxyError}</p>
-                <Button
-                  onClick={() => window.location.reload()}
-                  className="bg-white text-black hover:bg-[#e0e0e0]"
-                >
-                  <RotateCw className="size-4 mr-2" /> Reload Memphis
-                </Button>
+                {proxyDiag && (
+                  <p className="text-[11px] text-[#555] font-mono max-w-md">{proxyDiag}</p>
+                )}
+                <div className="flex items-center gap-2 mt-1">
+                  <Button
+                    onClick={() => {
+                      resetProxy();
+                      retryProxy();
+                    }}
+                    className="bg-white text-black hover:bg-[#e0e0e0]"
+                  >
+                    <RotateCw className="size-4 mr-2" /> Retry
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => window.location.reload()}
+                    className="border-[#262626] bg-transparent text-[#ccc] hover:bg-[#101010] hover:text-white"
+                  >
+                    Reload page
+                  </Button>
+                </div>
+                <p className="text-[11px] text-[#4a4a4a] max-w-md mt-2 leading-relaxed">
+                  If it keeps failing, try another browser (Chrome / Edge / Firefox), disable
+                  ad-blockers for this site, or allow site data in your browser settings.
+                </p>
               </>
             ) : (
               <>

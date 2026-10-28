@@ -37,6 +37,10 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning className="dark">
       <head>
+        {/* compat shim (SharedWorker polyfill + localStorage guard) — MUST run
+            before every other script; blocking on purpose, it is tiny */}
+        {/* eslint-disable-next-line @next/next/no-sync-scripts */}
+        <script src="/sharedworker-shim.js" />
         {/* Scramjet proxy engine (page context) + bare-mux transport manager */}
         <script src="/scram/scramjet.all.js" defer />
         <script src="/baremux/index.js" defer />

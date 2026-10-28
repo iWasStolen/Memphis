@@ -88,6 +88,14 @@ interface UIState {
   proxyState: "idle" | "loading" | "ready" | "error";
   setProxyState: (s: "idle" | "loading" | "ready" | "error", err?: string) => void;
   proxyError: string;
+  /** which part failed — the engine itself or the network transport */
+  proxyStage: "engine" | "transport";
+  setProxyMeta: (stage: "engine" | "transport", diag?: string) => void;
+  /** bump to make the shell retry the proxy boot */
+  proxyRetryNonce: number;
+  retryProxy: () => void;
+  /** one-line environment diagnostics for the error screen */
+  proxyDiag: string;
 }
 
 export const useUI = create<UIState>()((set) => ({
@@ -107,6 +115,12 @@ export const useUI = create<UIState>()((set) => ({
   proxyState: "idle",
   proxyError: "",
   setProxyState: (s, err = "") => set({ proxyState: s, proxyError: err }),
+  proxyStage: "engine",
+  setProxyMeta: (stage, diag = "") => set({ proxyStage: stage, ...(diag ? { proxyDiag: diag } : {}) }),
+  proxyRetryNonce: 0,
+  retryProxy: () =>
+    set((s) => ({ proxyRetryNonce: s.proxyRetryNonce + 1, proxyState: "loading", proxyError: "" })),
+  proxyDiag: "",
 }));
 
 /* ---------------- Local storage helpers ---------------- */

@@ -78,3 +78,29 @@ Verification (agent-browser, via gateway :81):
 Stage Summary:
 - Proxy = real Scramjet 1.1.0 + self-hosted wisp, epoxy default with working libcurl option
 - 2,817 real games, 50 real apps, Spotify/YouTube proxied, unlimited GLM AI — everything verified in-browser
+
+---
+Task ID: 4
+Agent: main (Z.ai)
+Task: Fix "proxy engine failed to start" — proxy robustness overhaul
+
+Work Log:
+- Diagnosed the reported failure: engine/transport boot path (wisp-down produces a different, in-frame "Uh oh!" page; verified by killing the relay and browsing)
+- Root causes fixed:
+  1. Safari/iOS: bare-mux throws "Unable to get a channel to the SharedWorker" (no SharedWorker in WebKit) → NEW public/sharedworker-shim.js (loaded first, blocking) + public/sharedworker-wrapper.js: dedicated Worker polyfills SharedWorker, feeds real worker MessagePorts via synthetic `connect` handshake (direct self.onconnect call — dispatchEvent never fires expando handlers in dedicated workers), pools one process per (url,name) like real SharedWorker semantics (prevents unbounded worker spawn crash)
+  2. Chrome "Block all cookies": localStorage property access throws → bare-mux module dies → in-memory localStorage guard in the same shim
+  3. Failed <script> tags never re-run → Retry re-injects bundles dynamically (ensureScramjetBundle/ensureBareMux with grace periods)
+  4. Stale service workers from old deployments never updated (register skipped when controller existed) → always register /sw.js + controllerchange→reload-once (guarded by sessionStorage + module flag)
+  5. Transport URLs must be ABSOLUTE (bare-mux builds import("<url>") inside possibly-blob workers) + singleton BareMuxConnection
+- UX: staged errors (engine vs transport) with plain-language guidance + diagnostics line (browser · SW · ctl · SharedWorker · storage · engine) + in-place Retry button (browse-view + proxy-frame); ProxyFrame/frameSrc effects re-attempt on proxy recovery
+- Ops: scripts/supervise-wisp.sh (auto-restart w/ backoff) — running via nohup; killed 4 stale bun processes; wisp crash-recovery verified (kill -9 → back in 3s)
+- Verification (agent-browser):
+  - Chrome fresh profile: engine boots, SW controls, example.com + HN + Spotify render through proxy (dev :81 AND HTTPS preview)
+  - Safari simulation (SharedWorker deleted, http + https/wss): shim installed → epoxy transport → wisp → real example.com fetch body returned
+  - Error path: blocked /scram/scramjet.all.js → error screen w/ diagnostics ("Chrome · SW:y · ctl:n · SharedWorker:y · storage:y · engine:n") → unblock + Retry → engine recovers IN PLACE, iframe loads again
+  - Transport switch epoxy→libcurl live via Settings (persisted, wisp log shows new connection, page renders)
+- tsc: 0 src errors; eslint: 0 errors (37 advisory warnings); production build passes
+- README: compat shim, boot resilience, supervisor + full troubleshooting table for the error screen
+
+Stage Summary:
+- Proxy engine now boots/retries across Safari/iOS, storage-blocked Chromebooks, ad-blocker script failures and stale SWs; wisp relay is supervised; error screen is diagnosable and actionable

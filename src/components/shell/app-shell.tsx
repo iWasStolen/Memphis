@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { useUI, useSettings, applySettings, applyCloak } from "@/lib/store";
-import { bootProxy, setProxyTransport } from "@/lib/scramjet";
+import { bootProxy, setProxyTransport, proxyDiagnostics, diagnosticsLine } from "@/lib/scramjet";
 import { Header, Wordmark } from "./header";
 import { Footer } from "./footer";
 import { SettingsModal } from "./settings-modal";
@@ -140,7 +140,10 @@ function ShortcutsModal() {
 /* ---------------- Main shell ---------------- */
 
 export default function AppShell() {
-  const { view, setView, modal, openModal, bootDone, finishBoot, setProxyState } = useUI();
+  const {
+    view, setView, modal, openModal, bootDone, finishBoot, setProxyState,
+    proxyRetryNonce, setProxyMeta,
+  } = useUI();
   const settings = useSettings((s) => s.settings);
   const [hydrated, setHydrated] = useState(false);
 
@@ -149,7 +152,8 @@ export default function AppShell() {
     setHydrated(true);
   }, []);
 
-  /* boot the Scramjet engine (service worker + controller) */
+  /* boot the Scramjet engine (controller + service worker), then the transport.
+     Re-runs when the user hits Retry (proxyRetryNonce). */
   useEffect(() => {
     if (!hydrated) return;
     let cancelled = false;
@@ -157,15 +161,25 @@ export default function AppShell() {
     (async () => {
       try {
         await bootProxy();
-        await setProxyTransport(settings.transport);
-        if (!cancelled) {
-          setProxyState("ready");
-        }
+        if (cancelled) return;
       } catch (err) {
         if (!cancelled) {
+          setProxyMeta("engine", diagnosticsLine(proxyDiagnostics()));
+          setProxyState("error", err instanceof Error ? err.message : String(err));
+        }
+        return;
+      }
+      /* engine is up — applying the transport can still fail (network,
+       blocked WebSocket, ...) and is independently retryable */
+      try {
+        await setProxyTransport(settings.transport);
+        if (!cancelled) setProxyState("ready");
+      } catch (err) {
+        if (!cancelled) {
+          setProxyMeta("transport", diagnosticsLine(proxyDiagnostics()));
           setProxyState(
             "error",
-            err instanceof Error ? err.message : String(err)
+            (err instanceof Error ? err.message : String(err))
           );
         }
       }
@@ -173,14 +187,7 @@ export default function AppShell() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated]);
-
-  /* apply the transport setting whenever it changes after boot */
-  useEffect(() => {
-    if (!hydrated) return;
-    setProxyTransport(settings.transport).catch(() => {});
-  }, [hydrated, settings.transport]);
+  }, [hydrated, proxyRetryNonce, settings.transport]);
 
   /* apply settings to DOM whenever they change */
   useEffect(() => {
@@ -190,7 +197,7 @@ export default function AppShell() {
   /* apply cloak on mount + when changed */
   useEffect(() => {
     applyCloak(settings);
-  }, [settings.cloakId, settings.customTitle, settings.customIcon]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [settings.cloakId, settings.customTitle, settings.customIcon]);
 
   /* skip boot if configured */
   useEffect(() => {
