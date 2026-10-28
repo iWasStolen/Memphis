@@ -1,0 +1,277 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+/* ============================================================
+   MEMPHIS unBLACKed — pure monochrome design system
+   ============================================================ */
+
+:root {
+  --radius: 0.5rem;
+  --background: #000000;
+  --foreground: #ffffff;
+  --card: #080808;
+  --card-foreground: #ffffff;
+  --popover: #0a0a0a;
+  --popover-foreground: #ffffff;
+  --primary: #ffffff;
+  --primary-foreground: #000000;
+  --secondary: #121212;
+  --secondary-foreground: #ffffff;
+  --muted: #101010;
+  --muted-foreground: #8f8f8f;
+  --accent: #1a1a1a;
+  --accent-foreground: #ffffff;
+  --destructive: #d9d9d9;
+  --destructive-foreground: #000000;
+  --border: #1f1f1f;
+  --input: #050505;
+  --ring: rgba(255, 255, 255, 0.55);
+  --sidebar: #050505;
+  --sidebar-foreground: #ffffff;
+  --sidebar-primary: #ffffff;
+  --sidebar-primary-foreground: #000000;
+  --sidebar-accent: #161616;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #1a1a1a;
+  --sidebar-ring: rgba(255, 255, 255, 0.55);
+  /* accent strength for interactive highlights (grayscale) */
+  --hi: 255;
+  /* text scale (settings) */
+  --text-scale: 1;
+  /* graphite mode softens pure black slightly */
+  --surface-elev: #101010;
+}
+
+html[data-mode="graphite"] {
+  --background: #0a0a0a;
+  --card: #101010;
+  --popover: #121212;
+  --muted: #161616;
+  --border: #242424;
+  --accent: #1e1e1e;
+}
+
+html[data-accent="ash"] {
+  --primary: #e6e6e6;
+  --hi: 214;
+}
+html[data-accent="silver"] {
+  --primary: #cfcfcf;
+  --hi: 190;
+}
+html[data-accent="bone"] {
+  --primary: #f2efe9;
+  --hi: 240;
+}
+
+html {
+  font-size: calc(16px * var(--text-scale));
+  color-scheme: dark;
+}
+
+html[data-textsize="xs"] { --text-scale: 0.875; }
+html[data-textsize="sm"] { --text-scale: 0.9375; }
+html[data-textsize="lg"] { --text-scale: 1.0625; }
+html[data-textsize="xl"] { --text-scale: 1.125; }
+
+html[data-font="mono"] body {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+}
+html[data-font="serif"] body {
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+/* background patterns (settings) */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+html[data-bg="grid"] body::before {
+  opacity: 1;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+html[data-bg="dots"] body::before {
+  opacity: 1;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+html[data-bg="scan"] body::before {
+  opacity: 1;
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent 0px,
+    transparent 3px,
+    rgba(255, 255, 255, 0.018) 3px,
+    rgba(255, 255, 255, 0.018) 4px
+  );
+}
+
+/* reduce effects */
+html[data-reducefx="1"] *,
+html[data-reducefx="1"] *::before,
+html[data-reducefx="1"] *::after {
+  animation-duration: 0.001s !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001s !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    background-attachment: fixed;
+  }
+  ::selection {
+    background: #ffffff;
+    color: #000000;
+  }
+}
+
+/* scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a2a transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #2a2a2a;
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #3d3d3d;
+}
+
+/* focus visibility */
+:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.7);
+  outline-offset: 2px;
+}
+
+/* utility: mono label chip */
+.mono-label {
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8f8f8f;
+}
+
+/* utility: hairline */
+.hairline {
+  border-color: #1a1a1a;
+}
+
+/* loading shimmer for skeletons */
+@keyframes memphis-shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, #0a0a0a 25%, #161616 50%, #0a0a0a 75%);
+  background-size: 800px 100%;
+  animation: memphis-shimmer 1.4s linear infinite;
+}
+
+/* boot screen */
+@keyframes boot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.boot-pulse {
+  animation: boot-pulse 1.1s ease-in-out infinite;
+}
+@keyframes boot-bar {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(0%); }
+}
+
+/* game canvas container */
+.game-stage {
+  touch-action: none;
+  user-select: none;
+}
+
+/* chat message enter */
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.msg-in {
+  animation: msg-in 0.18s ease-out;
+}
+
+/* thin divider */
+.hr-faint {
+  border-top: 1px solid #141414;
+}
+
+/* link underline on hover */
+.u-link {
+  text-decoration: underline transparent;
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.15s ease;
+}
+.u-link:hover {
+  text-decoration-color: rgba(255, 255, 255, 0.7);
+}

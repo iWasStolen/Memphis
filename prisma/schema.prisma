@@ -1,0 +1,195 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  role         String   @default("member") // owner | admin | mod | member
+  displayName  String?
+  bio          String   @default("")
+  status       String   @default("")
+  avatarUrl    String?
+  xp           Int      @default(0)
+  coins        Int      @default(100)
+  streak       Int      @default(0)
+  lastClaimAt  DateTime?
+  mutedUntil   DateTime?
+  banned       Boolean  @default(false)
+  banReason    String?
+  dmPolicy     String   @default("everyone") // everyone | friends | off
+  recoveryHash String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions      Session[]
+  messages      Message[]
+  friendsInit   Friendship[]  @relation("initiator")
+  friendsRecv   Friendship[]  @relation("receiver")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+}
+
+model Channel {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  topic     String   @default("")
+  kind      String   @default("text") // text | counting | casino
+  isPrivate Boolean  @default(false)
+  inviteCode String?
+  expiresAt DateTime?
+  locked    Boolean  @default(false)
+  createdBy String?
+  createdAt DateTime @default(now())
+  messages  Message[]
+}
+
+model Message {
+  id           String   @id @default(cuid())
+  channelId    String?
+  channel      Channel? @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  dmKey        String? // "u:<sortedIds>" for DMs, "g:<groupId>" for groups
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content      String
+  isSystem     Boolean  @default(false)
+  poll         Json?
+  deleted      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([channelId, createdAt])
+  @@index([dmKey, createdAt])
+}
+
+model Group {
+  id        String   @id @default(cuid())
+  name      String
+  createdBy String
+  createdAt DateTime @default(now())
+  members   GroupMember[]
+}
+
+model GroupMember {
+  id      String @id @default(cuid())
+  groupId String
+  userId  String
+  group   Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+}
+
+model Friendship {
+  id          String   @id @default(cuid())
+  initiatorId String
+  receiverId  String
+  status      String   @default("pending") // pending | accepted
+  initiator   User     @relation("initiator", fields: [initiatorId], references: [id], onDelete: Cascade)
+  receiver    User     @relation("receiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([initiatorId, receiverId])
+}
+
+model GameScore {
+  id        String   @id @default(cuid())
+  game      String
+  userId    String?
+  playerName String
+  score     Int
+  createdAt DateTime @default(now())
+
+  @@index([game, score])
+}
+
+model Report {
+  id        String   @id @default(cuid())
+  kind      String // game | link | message | other
+  target    String
+  note      String   @default("")
+  createdAt DateTime @default(now())
+}
+
+model AIConversation {
+  id           String   @id @default(cuid())
+  userId       String
+  title        String   @default("New chat")
+  instructions String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  messages     AIMessage[]
+}
+
+model AIMessage {
+  id             String         @id @default(cuid())
+  conversationId String
+  role           String // user | assistant
+  content        String
+  conversation   AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime       @default(now())
+}
+
+model AITokenUsage {
+  id     String @id @default(cuid())
+  userId String
+  day    String // YYYY-MM-DD
+  tokens Int    @default(0)
+
+  @@unique([userId, day])
+}
+
+model ModAction {
+  id        String   @id @default(cuid())
+  actorId   String
+  targetId  String?
+  action    String
+  reason    String   @default("")
+  createdAt DateTime @default(now())
+}
+
+model WatchItem {
+  id          String @id @default(cuid())
+  kind        String // movie | anime | youtube
+  itemKey     String
+  views       Int    @default(0)
+  ratingSum   Int    @default(0)
+  ratingCount Int    @default(0)
+
+  @@unique([kind, itemKey])
+}
+
+model WatchComment {
+  id        String   @id @default(cuid())
+  itemKey   String
+  userId    String?
+  author    String
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([itemKey, createdAt])
+}
+
+model ChatSettings {
+  id              String  @id @default("main")
+  wordFilter      String  @default("")
+  automodEnabled  Boolean @default(true)
+  floodMsgs       Int     @default(6)
+  floodSecs       Int     @default(5)
+  sameMsgLimit    Int     @default(3)
+  severeMuteSec   Int     @default(600)
+  slowmodeSec     Int     @default(0)
+  registrations   Boolean @default(true)
+  soundboard      Boolean @default(true)
+}
