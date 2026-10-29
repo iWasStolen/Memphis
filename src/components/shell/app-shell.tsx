@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { useUI, useSettings, applySettings, applyCloak } from "@/lib/store";
-import { bootProxy, setProxyTransport, proxyDiagnostics, diagnosticsLine } from "@/lib/scramjet";
+import { bootProxy, setProxyTransport, proxyDiagnostics, diagnosticsLine, type ProxyError } from "@/lib/scramjet";
 import { Header, Wordmark } from "./header";
 import { Footer } from "./footer";
 import { SettingsModal } from "./settings-modal";
@@ -152,35 +152,28 @@ export default function AppShell() {
     setHydrated(true);
   }, []);
 
-  /* boot the Scramjet engine (controller + service worker), then the transport.
-     Re-runs when the user hits Retry (proxyRetryNonce). */
+  /* boot the Scramjet v2 engine (service worker → bundles → transport →
+     Controller.wait), then keep the transport in sync with Settings.
+     Re-runs when the user hits Retry (proxyRetryNonce) or switches the
+     transport (live swap via controller.setTransport — no page reload). */
   useEffect(() => {
     if (!hydrated) return;
     let cancelled = false;
     setProxyState("loading");
     (async () => {
       try {
-        await bootProxy();
-        if (cancelled) return;
-      } catch (err) {
-        if (!cancelled) {
-          setProxyMeta("engine", diagnosticsLine(proxyDiagnostics()));
-          setProxyState("error", err instanceof Error ? err.message : String(err));
+        if (window.__memphisProxy) {
+          /* engine already up — Settings changed the transport */
+          await setProxyTransport(settings.transport);
+        } else {
+          await bootProxy(settings.transport);
         }
-        return;
-      }
-      /* engine is up — applying the transport can still fail (network,
-       blocked WebSocket, ...) and is independently retryable */
-      try {
-        await setProxyTransport(settings.transport);
         if (!cancelled) setProxyState("ready");
       } catch (err) {
         if (!cancelled) {
-          setProxyMeta("transport", diagnosticsLine(proxyDiagnostics()));
-          setProxyState(
-            "error",
-            (err instanceof Error ? err.message : String(err))
-          );
+          const stage = (err as ProxyError)?.stage ?? "engine";
+          setProxyMeta(stage, diagnosticsLine(proxyDiagnostics()));
+          setProxyState("error", err instanceof Error ? err.message : String(err));
         }
       }
     })();

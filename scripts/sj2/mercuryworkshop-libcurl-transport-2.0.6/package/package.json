@@ -1,0 +1,38 @@
+{
+  "name": "@mercuryworkshop/libcurl-transport",
+  "version": "2.0.6",
+  "description": "a proxy-transport that implements end-to-end encryption with libcurl.js and wisp",
+  "main": "./dist/index.mjs",
+  "keywords": [],
+  "author": "ading2210",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MercuryWorkshop/libcurl-transport.git"
+  },
+  "dependencies": {
+    "libcurl.js": "^0.7.5"
+  },
+  "devDependencies": {
+    "@mercuryworkshop/proxy-transports": "^1.0.2",
+    "esbuild": "^0.28.2",
+    "esbuild-plugin-d.ts": "^2.0.1",
+    "esbuild-plugin-umd-wrapper": "^3.0.0",
+    "typescript": "^6.0.3"
+  },
+  "files": [
+    "dist",
+    "lib"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.bundle.mjs"
+  }
+}

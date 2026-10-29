@@ -14,6 +14,7 @@ import {
   Minimize,
   RotateCw,
   ExternalLink,
+  Loader2,
 } from "lucide-react";
 
 import Game2048 from "./builtin/game-2048";
@@ -52,7 +53,8 @@ export function GamePlayer({
   onClose: () => void;
 }) {
   const { setReportTarget, openModal } = useUI();
-  const [embedMode, setEmbedMode] = useState<"direct" | "proxy">("direct");
+  /* sites that refuse iframes (px flag in the catalog) start proxied */
+  const [embedMode, setEmbedMode] = useState<"direct" | "proxy">(game.proxy ? "proxy" : "direct");
   const [proxySrc, setProxySrc] = useState("");
   const [loadFailed, setLoadFailed] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -127,6 +129,13 @@ export function GamePlayer({
       cancelled = true;
     };
   }, [embedMode, game.url]);
+
+  /* switching games (catalog → player) resets the mode from the flag */
+  useEffect(() => {
+    setEmbedMode(game.proxy ? "proxy" : "direct");
+    setProxySrc("");
+    setLoadFailed(false);
+  }, [game.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const Builtin = game.builtin ? BUILTIN[game.id] : null;
 
@@ -241,6 +250,11 @@ export function GamePlayer({
                 <ExternalLink className="size-4 mr-2" /> Open source site
               </Button>
             </div>
+          </div>
+        ) : embedMode === "proxy" && !proxySrc ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+            <Loader2 className="size-6 animate-spin text-white" />
+            <p className="text-xs font-mono text-[#777] boot-pulse">routing through scramjet…</p>
           </div>
         ) : (
           <iframe

@@ -1,7 +1,8 @@
 /* ============================================================
-   Memphis unBLACKed — built-in & open-source games that ship
-   with the app. The big external catalog lives in
-   data/games.json (see scripts/fetch-games.mjs).
+   Memphis unBLACKed — canvas games that ship with the app and
+   render natively inside the player (no external site needed).
+   External games live in data/games.json, built and verified
+   by scripts/build-games-catalog.mjs.
    ============================================================ */
 
 export interface BuiltinGameDef {
@@ -97,47 +98,5 @@ export const BUILTIN_GAMES: BuiltinGameDef[] = [
     category: "casual",
     builtin: true,
     desc: "Click the void. Buy matter. Ascend.",
-  },
-  {
-    id: "trex",
-    name: "T-Rex Runner",
-    category: "arcade",
-    embedUrl: "https://wayou.github.io/t-rex-runner/",
-    desc: "The offline dinosaur runner. Press space to jump.",
-  },
-  {
-    id: "clumsy",
-    name: "Clumsy Bird",
-    category: "arcade",
-    embedUrl: "https://ellisonleao.github.io/clumsy-bird/",
-    desc: "Open-source Flappy clone built with melonJS.",
-  },
-  {
-    id: "astray",
-    name: "Astray",
-    category: "puzzle",
-    embedUrl: "https://wwwtyro.github.io/Astray/",
-    desc: "Roll the ball through a WebGL maze. Arrows or WASD.",
-  },
-  {
-    id: "2048-classic",
-    name: "2048 (Classic)",
-    category: "puzzle",
-    embedUrl: "https://gabrielecirulli.github.io/2048/",
-    desc: "The original 2048 by Gabriele Cirulli.",
-  },
-  {
-    id: "hextris",
-    name: "Hextris",
-    category: "puzzle",
-    embedUrl: "https://hextris.github.io/hextris/",
-    desc: "A fast-paced hexagonal puzzle inspired by Tetris.",
-  },
-  {
-    id: "hexgl",
-    name: "HexGL",
-    category: "action",
-    embedUrl: "https://hexgl.bkcore.com/",
-    desc: "A WebGL racing game by Thibaut Despoulain.",
   },
 ];

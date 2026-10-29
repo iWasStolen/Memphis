@@ -248,6 +248,8 @@ export default function BrowseView() {
   const openProxiedNewTab = useCallback(async () => {
     if (!active?.url) return;
     try {
+      /* v2 note: the SW routes this prefix back to THIS page's controller,
+         so the companion tab serves as long as this page stays open */
       const href = await proxiedHref(active.url);
       window.open(href, "_blank");
     } catch {

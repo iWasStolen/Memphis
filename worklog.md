@@ -153,3 +153,37 @@ Work Log:
 
 Stage Summary:
 - Hydration is now clean; the self-removing Scramjet bundle is loaded dynamically post-hydration with a preload hint so proxy boot speed is unchanged
+
+---
+Task ID: 7
+Agent: main (Z.ai)
+Task: Upgrade to Scramjet v2 (newest) + replace mobile-slop games with popular titles
+
+Work Log:
+- RESEARCH: Scramjet v2 = @mercuryworkshop/scramjet@2.0.67-alpha.2 + scramjet-controller@0.0.14 + scramjet-utils@0.0.3 (main-branch pairing, verified via repo package.jsons). Completely new architecture vs v1:
+  * no bare-mux, no SharedWorker — transport object lives in the page; SW routes requests back via $controller$init MessageChannel RPC
+  * new prefix /~/sj/<controller>/<frame>/ ; new IDB __scramjet_controller (store "state"); controller.api.js version-asserts the core at construction
+  * API: window.$scramjetController.Controller({serviceworker, transport, config}) → controller.wait() → controller.createFrame() → frame.go(url); no public encodeUrl
+- MIGRATION (all v1 files deleted: public/scram/, public/baremux/):
+  * vendored public/scram2/{scramjet.js,scramjet.wasm}, public/controller/{api,sw,inject}.js, public/utils/scramjet-utils.js, epoxy/index.mjs (v3 EpoxyTransport), libcurl/index.mjs (v2 LibcurlClient)
+  * public/sw.js → importScripts controller.sw.js + shouldRoute/route wrapper (controller.sw.js owns install/activate/revive)
+  * src/lib/scramjet.ts rewritten: boot order = SW register first → IDB self-heal (__scramjet_controller) → core→api→utils scripts → transport (dynamic import with webpackIgnore+turbopackIgnore, eager init()) → Controller → wait() → 15s keepalive interval; encodeUrl via POOLED DETACHED FRAMES (frame.go sets element.src; routing is URL-prefix based so the href works anywhere while the page controller lives); setProxyTransport = live swap via controller.setTransport (demo-verified semantics); stage-tagged errors (ProxyError.stage) keep the engine/transport error UI
+  * app-shell boot effect: single bootProxy(settings.transport); on transport change while booted → live setTransport
+  * layout.tsx: bare-mux script removed; preload hints for scramjet2 files + modulepreload epoxy; shim kept for the localStorage guard only
+  * next.config.ts: COOP/COEP headers REMOVED — v2 needs no SharedArrayBuffer, and credentialless COEP was BLOCKING direct game embeds (classic.minecraft.net rendered as a broken frame with them; confirmed running the moment they were dropped)
+- E2E VERIFIED (agent-browser, gateway :81, fresh profiles):
+  * v2 boot: 0 page errors, 0 hydration warnings, core+controller+proxyReady+SW all up
+  * example.com via epoxy through /~/sj/ prefix: real content
+  * live transport switch epoxy→libcurl in Settings (controller.setTransport) → wikipedia.org via libcurl: real content; 0 errors
+  * reload with SW active: still clean
+- GAMES CATALOG REPLACED (GameMonetize hypercasual slop → popular titles):
+  * scripts/fetch-games.mjs (GM feed) deleted; scripts/build-games-catalog.mjs created — hand-curated 62 external candidates, LIVE-VERIFIED at build time: HTTP 200 (curl — Node fetch's TLS fingerprint false-positives WAF 403s), no X-Frame-Options, no CSP frame-ancestors, real-iframe Sec-Fetch-* headers, spam/parked detection (caught 5 taken-over mirror domains: getawayshootout.io/tunnel-rush.io/snowrider3d.io = casino/football spam, happywheels.io/bitlife.io parked, eggy-car.io placeholder)
+  * Final catalog: 74 games (62 external + 12 builtins) — Minecraft Classic, Paper Minecraft (Scratch 10128407), Krunker, Shell Shockers, Voxiom, Repuls, Kour, 1v1.LOL, Slither, Diep, Arras, Bonk, Zombs Royale, Smash Karts, Taming, Starblast, Territorial, Skribbl, Paper.io 2, Mope, Wormate, Deeeep, Splix, Powerline, Brutal, Wings, Little Big Snake, Sploop, Retro Bowl, Slope, Run 3, Tunnel Rush, Crossy Road, Moto X3M, Drift Boss, Dino, Clumsy Bird, Vex 7, F&W 2, Temple of Boom, MMP (Scratch), Happy Wheels, Age of War, Impossible Quiz, Henry Stickmin, FNF, Baldi's, Bloxorz, Duck Life 4, Pac-Man, Minesweeper, Solitaire, Hextris, Astray, HexGL, Cookie Clicker, Doge Miner 2, A Dark Room, Universal Paperclips, Slow Roads, DashCraft, Google Feud
+  * sources: official sites / Scratch /embed / GitHub Pages / jsDelivr / KBHgames / Gameflare /embed (Flash classics; both are Cloudflare-fronted — they challenge headless Chrome in testing but curl + real-iframe headers pass 200; player has load-via-proxy + report fallbacks)
+  * Poki/CrazyGames investigated and REJECTED: Poki's Next.js SPA reads the game slug as undefined under the proxy and renders 404 (top-level too); CrazyGames 404s proxy traffic entirely — no broken games shipped
+  * API/player wiring: RawGame.px + GameDef.proxy flag (sites that refuse iframes start proxied), duplicate builtin embeds removed from games-builtin.ts, play-view copy updated, "2700+" copy fixed everywhere (home/footer/layout/types/api)
+- PLAY-TESTED (browser + VLM screenshot analysis): Minecraft Classic RUNNING (gameplay visible), Paper Minecraft RUNNING (Scratch player + green flag), Slither.io RUNNING (start screen), Retro Bowl + Moto X3M render their real game pages (own Play-button UX)
+- Production build: EXIT 0, all routes generated; final smoke: app/sw/scram2/controller/utils all 200, /api/games = 74 with Minecraft Classic first
+
+Stage Summary:
+- Proxy engine is now Scramjet v2 (newest, 2.0.67-alpha.2) with live transport switching and no SharedWorker dependency; games are 74 hand-verified popular titles with automated dead-link/spam detection at build time

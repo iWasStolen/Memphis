@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Memphis unBLACKed",
   description:
-    "Memphis unBLACKed — 2700+ games, 50 apps, Spotify, YouTube, unlimited GLM AI chat and a Scramjet web proxy.",
+    "Memphis unBLACKed — 74 popular games, 50 apps, Spotify, YouTube, unlimited GLM AI chat and a Scramjet web proxy.",
   icons: {
     icon: "/memphis.svg",
   },
@@ -37,18 +37,23 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning className="dark">
       <head>
-        {/* compat shim (SharedWorker polyfill + localStorage guard) — MUST run
-            before every other script; blocking on purpose, it is tiny */}
+        {/* compat shim (localStorage guard — keeps settings persistence
+            alive on storage-blocked browsers) — blocking on purpose,
+            it is tiny. No SharedWorker polyfill needed anymore: the
+            Scramjet v2 transports run in the page, not a worker. */}
         {/* eslint-disable-next-line @next/next/no-sync-scripts */}
         <script src="/sharedworker-shim.js" />
-        {/* Scramjet engine is NOT statically rendered: the bundle deletes its
-            own <script> tag after executing (document.currentScript.remove()),
-            which would leave React hydrating a head that no longer matches
-            the server HTML. It is injected dynamically in bootProxy();
-            this preload keeps the 180KB bundle warm so boot stays fast. */}
-        <link rel="preload" as="script" href="/scram/scramjet.all.js" />
-        {/* bare-mux transport manager (does not self-remove — safe to SSR) */}
-        <script src="/baremux/index.js" defer />
+        {/* Scramjet v2 engine files are ALL injected dynamically by
+            bootProxy() (post-hydration — the v1 bundle deleted its own
+            <script> tag and broke React hydration). These hints keep
+            the bundles warm so proxy boot stays fast:
+            core → controller API → utils → wasm (fetched in wait()) →
+            epoxy transport module (the default). */}
+        <link rel="preload" as="script" href="/scram2/scramjet.js" />
+        <link rel="preload" as="script" href="/controller/controller.api.js" />
+        <link rel="preload" as="script" href="/utils/scramjet-utils.js" />
+        <link rel="preload" as="fetch" href="/scram2/scramjet.wasm" />
+        <link rel="modulepreload" href="/epoxy/index.mjs" />
       </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}

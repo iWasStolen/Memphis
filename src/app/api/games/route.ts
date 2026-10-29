@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /* ------------------------------------------------------------
-   /api/games — catalog of 2700+ real HTML5 games
+   /api/games — catalog of 74 hand-verified popular games
    Sources: data/games.json (GameMonetize public feed) + the
    built-in canvas games that ship with the app.
    Query: q, cat, ids, page, per, sort, meta
@@ -18,6 +18,8 @@ interface RawGame {
   t: string;
   d: string;
   u: string;
+  /** 1 = source site refuses iframes, load through the proxy */
+  px?: number;
   c: string;
   g: string[];
   th: string;
@@ -74,6 +76,7 @@ async function loadCatalog(): Promise<{ catalog: Catalog; games: GameDef[] }> {
       name: g.t,
       desc: g.d,
       url: builtin ? undefined : g.u,
+      proxy: builtin ? undefined : !!g.px,
       category: g.c,
       tags: g.g || [],
       thumb: g.th || "",

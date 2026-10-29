@@ -14,7 +14,7 @@ export type ViewId =
 
 export const VIEWS: { id: ViewId; label: string; desc: string }[] = [
   { id: "home", label: "Home", desc: "Dashboard" },
-  { id: "play", label: "Play", desc: "2700+ games" },
+  { id: "play", label: "Play", desc: "74 popular games" },
   { id: "apps", label: "Apps", desc: "50 web apps" },
   { id: "chat", label: "Chat", desc: "Community" },
   { id: "ai", label: "AI", desc: "GLM chat — free, unlimited" },
@@ -177,6 +177,8 @@ export interface GameDef {
   desc: string;
   /** embed url for external games, empty for builtins */
   url?: string;
+  /** true when the source site refuses iframes — start proxied */
+  proxy?: boolean;
   category: string;
   tags?: string[];
   thumb?: string;

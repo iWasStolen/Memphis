@@ -6,21 +6,11 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
-  async headers() {
-    return [
-      {
-        /* Cross-origin isolation: required by the Scramjet transports
-           (SharedArrayBuffer in the bare-mux shared worker).
-           `credentialless` keeps cross-origin game embeds + CDN
-           thumbnails working without CORP headers. */
-        source: "/:path*",
-        headers: [
-          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
-          { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
-        ],
-      },
-    ];
-  },
+  /* No global COOP/COEP headers: the Scramjet v2 transports run in the
+     page (no SharedWorker → no SharedArrayBuffer requirement), and
+     cross-origin isolation BLOCKS direct game embeds like
+     classic.minecraft.net that don't send CORP/COEP. Proxied content
+     manages its own headers inside the engine. */
 };
 
 export default nextConfig;

@@ -64,7 +64,7 @@ export default function PlayView() {
       const params = new URLSearchParams();
       if (debouncedQ) params.set("q", debouncedQ);
       if (cat !== "all") params.set("cat", cat);
-      if (filter === "builtin") params.set("ids", "2048,snake,tetris,minesweeper,breakout,flappy,pong,memory,tictactoe,simon,asteroids,clicker,trex,clumsy,astray,2048-classic,hextris,hexgl");
+      if (filter === "builtin") params.set("ids", "2048,snake,tetris,minesweeper,breakout,flappy,pong,memory,tictactoe,simon,asteroids,clicker");
       if (filter === "favorites" && favs.length) params.set("ids", favs.join(","));
       if (filter === "recent" && recents.length) params.set("ids", recents.join(","));
       if (sort !== "default") params.set("sort", sort);
@@ -164,7 +164,7 @@ export default function PlayView() {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search 2700+ games…"
+              placeholder="Search games…"
               aria-label="Search games"
               spellCheck={false}
               className="w-64 max-w-[60vw] h-9 rounded-full bg-[#050505] border border-[#1f1f1f] pl-9 pr-3 text-[13px] text-white placeholder:text-[#555] outline-none focus:border-[#3a3a3a]"
@@ -256,7 +256,7 @@ export default function PlayView() {
         {loading ? (
           <div className="flex flex-col items-center justify-center py-24 gap-3 text-[#777]">
             <Loader2 className="size-6 animate-spin text-white" />
-            <p className="text-xs font-mono">loading {total ? total.toLocaleString() : "2700+"} games…</p>
+            <p className="text-xs font-mono">loading {total ? total.toLocaleString() : ""} games…</p>
           </div>
         ) : games.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 gap-3 text-center px-6">

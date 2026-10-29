@@ -1,64 +1,97 @@
 "use client";
 
 /* ============================================================
-   Memphis unBLACKed — Scramjet proxy client integration
+   Memphis unBLACKed — Scramjet v2 proxy client integration
 
-   Engine: Scramjet 1.1.0 (Mercury Workshop) served from /scram/
-   Transports (switchable in Settings):
-     - epoxy   (default)  /epoxy/index.mjs   { wisp }
-     - libcurl            /libcurl/index.mjs { websocket }
+   Engine: @mercuryworkshop/scramjet 2.0.67-alpha.2
+     + scramjet-controller 0.0.14
+     + scramjet-utils 0.0.3
+   (new architecture: no bare-mux, no SharedWorker — the
+   transport object lives in the page and the service worker
+   routes requests to it over a MessageChannel RPC)
+
+   Files (all same-origin, served statically):
+     /scram2/scramjet.js          core (global $scramjet)
+     /scram2/scramjet.wasm        rewriter wasm
+     /controller/controller.api.js  page API (global $scramjetController)
+     /controller/controller.sw.js   service worker runtime
+     /controller/controller.inject.js  in-frame bootstrap
+     /utils/scramjet-utils.js     plugins (UrlWatcherPlugin, …)
+
+   Transports (switchable in Settings, live-swappable):
+     - epoxy (default)  /epoxy/index.mjs  → new EpoxyTransport({ wisp })
+     - libcurl          /libcurl/index.mjs → new LibcurlClient({ wisp })
    Both multiplex TCP through the self-hosted wisp relay on
    port 3001, exposed by the sandbox gateway as
    wss://<host>/wisp/?XTransformPort=3001
 
-   The service worker at /sw.js intercepts scramjet-encoded
+   The service worker at /sw.js intercepts /~/sj/<controller>/<frame>/
    URLs and serves the rewritten, same-origin content.
 
-   Browser support notes:
-   - Safari/iOS: /sharedworker-shim.js polyfills SharedWorker
-     with a dedicated Worker + synthetic `connect` event.
-   - "Block all cookies" Chrome: in-memory localStorage shim
-     (same preload script).
-   - Transport URLs passed to setTransport() must be ABSOLUTE —
-     bare-mux builds `import("<url>")` inside the (possibly
-     blob-based) worker, where relative resolution fails.
+   Version-lock note: controller.api.js asserts the core runtime
+   version at construction (2.0.67-alpha.2) — always vendor
+   matching builds of scramjet + scramjet-controller together.
    ============================================================ */
 
 import type { ProxyTransport } from "./types";
 
-interface ScramjetControllerI {
-  init(): Promise<void> | void;
-  encodeUrl(url: string): string;
+/* ---------------- v2 runtime types ---------------- */
+
+interface V2Frame {
+  element: HTMLIFrameElement;
+  go(url: string): void;
+  reload(): void;
+  back(): void;
+  forward(): void;
 }
 
-interface ScramjetLoadController {
-  ScramjetController: new (opts: {
-    files: { wasm: string; all: string; sync: string };
-  }) => ScramjetControllerI;
+interface V2Controller {
+  wait(): Promise<void>;
+  createFrame(element?: HTMLIFrameElement, options?: { plugins?: unknown[] }): V2Frame;
+  setTransport(t: unknown): void;
+  transport: unknown;
+  frames: V2Frame[];
 }
 
-interface BareMuxConnectionI {
-  getTransport(): Promise<string>;
-  setTransport(url: string, args: unknown[]): Promise<void>;
+interface V2Globals {
+  Controller: new (opts: {
+    serviceworker: ServiceWorker;
+    transport: unknown;
+    config?: {
+      prefix?: string;
+      scramjetPath?: string;
+      wasmPath?: string;
+      injectPath?: string;
+    };
+  }) => V2Controller;
 }
 
 declare global {
   interface Window {
-    $scramjetLoadController?: () => ScramjetLoadController;
-    BareMux?: {
-      BareMuxConnection: new (workerUrl: string) => BareMuxConnectionI;
-    };
+    $scramjet?: unknown;
+    $scramjetController?: V2Globals;
     __memphisProxy?: ProxyHandle;
   }
 }
 
 export interface ProxyHandle {
   encodeUrl(url: string): string;
-  controller: ScramjetControllerI;
+  controller: V2Controller;
 }
 
 export type ProxyState = "idle" | "loading" | "ready" | "error";
 export type ProxyStage = "engine" | "transport";
+
+/** Error carrying the boot stage it failed at (engine vs transport). */
+export interface ProxyError extends Error {
+  stage?: ProxyStage;
+}
+
+function stageError(stage: ProxyStage, message: string): ProxyError {
+  const err = new Error(message) as ProxyError;
+  err.stage = stage;
+  return err;
+}
 
 /* ---------------- wisp URL ---------------- */
 
@@ -87,13 +120,13 @@ function waitFor(cond: () => boolean, timeoutMs: number, label: string): Promise
   });
 }
 
-/** Absolute URL for a same-origin path (workers may not resolve relative URLs). */
+/** Absolute URL for a same-origin path (module imports inside workers
+    and dynamic imports resolve against the document — always be explicit). */
 function abs(path: string): string {
   return new URL(path, location.href).href;
 }
 
-/** Dynamically (re)load a same-origin script — used when the static head tag
-    was blocked by an extension or a flaky network. */
+/** Dynamically (re)load a same-origin classic script. */
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
@@ -104,173 +137,116 @@ function loadScript(src: string): Promise<void> {
   });
 }
 
-/** Load the scramjet controller bundle on demand. The bundle deletes its
-    own <script> tag after executing (document.currentScript.remove()), so
-    it must never be statically SSR'd — React hydration would fail on the
-    missing head node. A <link rel="preload"> in the layout keeps it warm. */
-let scramjetLoadPromise: Promise<void> | null = null;
-function ensureScramjetBundle(): Promise<void> {
-  if (window.$scramjetLoadController) return Promise.resolve();
-  if (!scramjetLoadPromise) {
-    scramjetLoadPromise = loadScript("/scram/scramjet.all.js")
-      .then(() =>
-        waitFor(() => !!window.$scramjetLoadController, 4000, "scramjet controller bundle")
-      )
-      .catch((err) => {
-        /* allow Retry to inject a fresh tag — a failed <script> never re-runs */
-        scramjetLoadPromise = null;
-        throw err;
-      });
+/* ---------------- engine bundles ---------------- */
+
+/* Load order is mandatory: core (scramjet.js) → page API
+   (controller.api.js) → utils. The Controller constructor
+   version-checks $scramjet, so the core must exist first.
+   None of these are statically SSR'd — the v1 engine bundle
+   deleted its own <script> tag and broke hydration; every
+   engine file here is injected post-hydration instead. */
+
+let bundlesPromise: Promise<void> | null = null;
+
+function ensureEngineBundles(): Promise<void> {
+  if (window.$scramjetController) return Promise.resolve();
+  if (!bundlesPromise) {
+    bundlesPromise = (async () => {
+      await loadScript("/scram2/scramjet.js");
+      await waitFor(() => !!window.$scramjet, 4000, "scramjet core");
+      await loadScript("/controller/controller.api.js");
+      await waitFor(() => !!window.$scramjetController, 4000, "scramjet controller API");
+      await loadScript("/utils/scramjet-utils.js").catch(() => {});
+    })().catch((err) => {
+      /* allow Retry to re-inject — a failed <script> never re-runs */
+      bundlesPromise = null;
+      throw err;
+    });
   }
-  return scramjetLoadPromise;
+  return bundlesPromise;
 }
 
-/** Make sure the bare-mux client is present; re-inject if needed. */
-let baremuxWaited = false;
-async function ensureBareMux(): Promise<void> {
-  if (window.BareMux) return;
-  if (!baremuxWaited) {
-    baremuxWaited = true;
-    const grace = document.readyState === "complete" ? 3000 : 8000;
-    await waitFor(() => !!window.BareMux, grace, "bare-mux client").catch(() => {});
-    if (window.BareMux) return;
-  }
-  await loadScript("/baremux/index.js");
-  await waitFor(() => !!window.BareMux, 4000, "bare-mux client");
+/* ---------------- transports ---------------- */
+
+/* v2 transports are classes with a default export, loaded as
+   ES modules and instantiated with the wisp URL. They run in
+   the PAGE (no SharedWorker → Safari/iOS works natively). */
+
+interface V2Transport {
+  ready: boolean;
+  init(): Promise<void>;
 }
 
-/* ---------------- transport ---------------- */
-
-/** single BareMuxConnection for the page — avoids piling up getPort listeners */
-let muxConn: BareMuxConnectionI | null = null;
+interface TransportModule {
+  default: new (opts: { wisp: string }) => V2Transport;
+}
 
 export function transportModule(t: ProxyTransport): string {
   return t === "libcurl" ? "/libcurl/index.mjs" : "/epoxy/index.mjs";
 }
 
-export async function setProxyTransport(t: ProxyTransport): Promise<void> {
-  await ensureBareMux();
-  if (!muxConn) muxConn = new window.BareMux!.BareMuxConnection(abs("/baremux/worker.js"));
-  const mod = abs(transportModule(t));
-  const args = t === "libcurl" ? [{ websocket: wispUrl() }] : [{ wisp: wispUrl() }];
-  /* always re-apply: the wisp URL depends on location.host and the worker
-     may survive page reloads with stale args */
-  await muxConn.setTransport(mod, args);
+/** Instantiate + eagerly init a transport (idempotent per instance). */
+async function makeTransport(t: ProxyTransport): Promise<V2Transport> {
+  /* both bundler directives needed: Next dev runs Turbopack, the
+     production build may run webpack — neither may resolve these
+     fully-dynamic engine-internal imports at build time */
+  const mod = (await import(
+    /* webpackIgnore: true */ /* turbopackIgnore: true */
+    abs(transportModule(t))
+  )) as TransportModule;
+  const transport = new mod.default({ wisp: wispUrl() });
+  if (!transport.ready) {
+    await transport.init();
+  }
+  return transport;
 }
 
-/** Forget the transport connection (used when retrying after a failure). */
-export function resetTransport(): void {
-  muxConn = null;
-}
+/* ---------------- $controller IndexedDB self-heal ---------------- */
 
-/* ---------------- $scramjet IndexedDB self-heal ---------------- */
+/* v2 stores cookies in `__scramjet_controller` (v1: $scramjet).
+   Only the page-side api.js opens it (with a proper upgrade
+   handler creating the "state" store), so the v1 SW race cannot
+   recur — but a half-created database from an aborted first run
+   would still break every boot. Delete it and let the engine
+   recreate the full schema. */
 
-/* The vendored Scramjet opens its database at version 1 and only creates
-   object stores inside `onupgradeneeded`. A database that already exists at
-   version 1 with a DIFFERENT store set (left behind by an earlier build, or
-   created empty by the service worker winning a first-visit race) therefore
-   never gets repaired — every db.transaction(...) then throws
-   "Failed to execute 'transaction' on 'IDBDatabase': One of the specified
-   object stores was not found."
+const CONTROLLER_DB_NAME = "__scramjet_controller";
+const CONTROLLER_DB_STORES = ["state"];
 
-   Repair = delete the broken database; the controller recreates it with the
-   full schema moments later. (Bumping the version instead would break the
-   engine, which insists on opening version 1.) */
-
-const SCRAMJET_DB_NAME = "$scramjet";
-const SCRAMJET_REQUIRED_STORES = [
-  "config",
-  "cookies",
-  "redirectTrackers",
-  "referrerPolicies",
-  "publicSuffixList",
-];
-const IDB_REPAIR_RELOAD_FLAG = "memphis-idb-repair";
-
-interface DBInfo {
-  version: number;
-  stores: string[];
-}
-
-/** Inspect the existing $scramjet database without changing its version. */
-function inspectScramjetDB(): Promise<DBInfo | null> {
+function deleteControllerDB(): Promise<void> {
   return new Promise((resolve) => {
-    /* open WITHOUT a version: never triggers our own upgrade, never blocks */
-    const req = indexedDB.open(SCRAMJET_DB_NAME);
-    req.onsuccess = () => {
-      const db = req.result;
-      const info: DBInfo = { version: db.version, stores: [...db.objectStoreNames] };
-      db.close(); /* release before any later deleteDatabase */
-      resolve(info);
-    };
-    req.onerror = () => resolve(null);
+    const req = indexedDB.deleteDatabase(CONTROLLER_DB_NAME);
+    req.onsuccess = req.onerror = () => resolve();
+    /* v2 keeps no IDB connection in the SW — a blocked delete is
+       practically impossible; resolve regardless after a wait */
+    req.onblocked = () => setTimeout(resolve, 2000);
   });
 }
 
-/** Delete $scramjet, recovering from a stale service worker holding it
-    open (deletion is "blocked" until every connection closes). */
-function deleteScramjetDB(): Promise<void> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (!settled) {
-        settled = true;
-        resolve();
-      }
-    };
-    const req = indexedDB.deleteDatabase(SCRAMJET_DB_NAME);
-    req.onsuccess = finish;
-    req.onerror = finish;
-    req.onblocked = async () => {
-      /* usually the old service worker — drop its registration so the
-         browser terminates it and releases the connection */
-      try {
-        const reg = await navigator.serviceWorker?.getRegistration();
-        await reg?.unregister();
-      } catch {
-        /* registration lookup blocked — the wait below is the fallback */
-      }
-      /* give the idle worker time to die, then resolve so boot continues
-         (a still-queued delete completes on its own once it lets go) */
-      setTimeout(finish, 8000);
-      /* one-time reload: the next boot retries the deletion with the
-         service worker out of the way (guarded → cannot loop) */
-      try {
-        if (!sessionStorage.getItem(IDB_REPAIR_RELOAD_FLAG)) {
-          sessionStorage.setItem(IDB_REPAIR_RELOAD_FLAG, "1");
-          setTimeout(() => location.reload(), 200);
-        }
-      } catch {
-        /* storage blocked — in-page wait is the only recovery */
-      }
-    };
-  });
-}
-
-/** Make sure the $scramjet database is either absent or healthy (version 1
-    with every required store) before the engine opens it. */
-export async function ensureScramjetDB(): Promise<void> {
+export async function ensureControllerDB(): Promise<void> {
   if (typeof indexedDB === "undefined") return;
-
-  /* fast path — nothing to heal if the database doesn't exist yet */
   try {
     if (typeof indexedDB.databases === "function") {
       const dbs = await indexedDB.databases();
-      if (!dbs.some((d) => d.name === SCRAMJET_DB_NAME)) return;
+      if (!dbs.some((d) => d.name === CONTROLLER_DB_NAME)) return;
     }
+    const info = await new Promise<{ version: number; stores: string[] } | null>((resolve) => {
+      const req = indexedDB.open(CONTROLLER_DB_NAME); /* versionless — never upgrades */
+      req.onsuccess = () => {
+        const db = req.result;
+        const info = { version: db.version, stores: [...db.objectStoreNames] };
+        db.close();
+        resolve(info);
+      };
+      req.onerror = () => resolve(null);
+    });
+    if (!info) return;
+    const missing = CONTROLLER_DB_STORES.filter((s) => !info.stores.includes(s));
+    if (info.version === 1 && missing.length === 0) return; /* healthy */
+    await deleteControllerDB();
   } catch {
-    /* databases() unsupported or blocked — fall through to inspection */
+    /* inspection failed — let the engine surface a proper error */
   }
-
-  const info = await inspectScramjetDB();
-  if (!info) return; /* unreadable — let the engine surface a proper error */
-
-  const missing = SCRAMJET_REQUIRED_STORES.filter((s) => !info.stores.includes(s));
-  if (info.version === 1 && missing.length === 0) return; /* healthy */
-
-  /* broken schema (or unexpected version) — delete and let the controller
-     recreate it with the complete store set */
-  await deleteScramjetDB();
 }
 
 /* ---------------- diagnostics ---------------- */
@@ -282,7 +258,7 @@ export interface ProxyDiagnostics {
   controlled: boolean;
   isolated: boolean;
   scramjetGlobal: boolean;
-  bareMuxGlobal: boolean;
+  controllerGlobal: boolean;
   localStorage: boolean;
 }
 
@@ -291,7 +267,7 @@ export function proxyDiagnostics(): ProxyDiagnostics {
   if (typeof window === "undefined") {
     return {
       ua: "", sharedWorker: false, serviceWorker: false, controlled: false,
-      isolated: false, scramjetGlobal: false, bareMuxGlobal: false, localStorage: false,
+      isolated: false, scramjetGlobal: false, controllerGlobal: false, localStorage: false,
     };
   }
   let storageOk = false;
@@ -305,8 +281,8 @@ export function proxyDiagnostics(): ProxyDiagnostics {
     serviceWorker: "serviceWorker" in navigator,
     controlled: !!navigator.serviceWorker?.controller,
     isolated: !!window.crossOriginIsolated,
-    scramjetGlobal: !!window.$scramjetLoadController,
-    bareMuxGlobal: !!window.BareMux,
+    scramjetGlobal: !!window.$scramjet,
+    controllerGlobal: !!window.$scramjetController,
     localStorage: storageOk,
   };
 }
@@ -354,95 +330,129 @@ function armControllerReload(wasControlled: boolean) {
   });
 }
 
-export function bootProxy(): Promise<ProxyHandle> {
+/**
+ * Boot the v2 engine with the given transport.
+ * Order (per the official wiring):
+ *   1. register /sw.js, wait for a controlling service worker
+ *   2. load core → controller API → utils
+ *   3. instantiate the transport (epoxy | libcurl) against wisp
+ *   4. new Controller({ serviceworker, transport, config })
+ *   5. await controller.wait()  (SW handshake + wasm + cookies)
+ *   6. keepalive pings so the SW is not terminated mid-session
+ */
+export function bootProxy(transport: ProxyTransport = "epoxy"): Promise<ProxyHandle> {
   if (typeof window === "undefined") return Promise.reject(new Error("no window"));
   if (window.__memphisProxy) return Promise.resolve(window.__memphisProxy);
   if (bootPromise) return bootPromise;
 
   bootPromise = (async () => {
-    /* stage 1 — load the engine bundle (dynamically — it self-removes its
-       tag, so it can't be SSR'd; a preload link in the layout keeps it warm).
-       A blocked/failed load is retriable via the Retry button */
-    try {
-      await ensureScramjetBundle();
-    } catch (err) {
-      throw new Error(
-        "The Scramjet engine scripts did not load. This is usually an ad-blocker, " +
-        "a school filter, or an old service worker from a previous visit. " +
-        `(${err instanceof Error ? err.message : String(err)})`
-      );
-    }
-
     if (!("serviceWorker" in navigator)) {
-      throw new Error(
+      throw stageError(
+        "engine",
         "This browser does not support service workers, which the proxy needs. " +
         "Try Chrome, Edge or Firefox over HTTPS."
       );
     }
 
-    /* stage 1.5 — self-heal the engine's IndexedDB. A $scramjet database
-       left at version 1 with missing object stores (earlier build or an
-       SW first-visit race) can never be upgraded by the engine itself;
-       delete it so the controller recreates the full schema */
-    try {
-      await ensureScramjetDB();
-    } catch (err) {
-      throw new Error(
-        "A leftover proxy database from an earlier visit could not be cleared. " +
-        "Clear this site's data in your browser settings and try again. " +
-        `(${err instanceof Error ? err.message : String(err)})`
-      );
-    }
-
-    /* stage 2 — construct + init the controller FIRST (official demo order):
-       it creates the $scramjet IndexedDB with the full schema so the
-       service worker finds a complete database */
-    let controller: ScramjetControllerI;
-    try {
-      const { ScramjetController } = window.$scramjetLoadController!();
-      controller = new ScramjetController({
-        files: {
-          wasm: "/scram/scramjet.wasm.wasm",
-          all: "/scram/scramjet.all.js",
-          sync: "/scram/scramjet.sync.js",
-        },
-      });
-      await controller.init();
-    } catch (err) {
-      throw new Error(
-        "The Scramjet engine could not initialize its local database. " +
-        "Private-browsing restrictions or blocked site data can cause this. " +
-        "Clearing this site's data in your browser settings usually fixes it. " +
-        `(${err instanceof Error ? err.message : String(err)})`
-      );
-    }
-
-    /* stage 3 — service worker. ALWAYS register: the call is idempotent and
-       triggers the update check that replaces any stale worker from an
-       earlier deployment; skipWaiting + clients.claim take over the page */
+    /* stage 1 — service worker must exist FIRST: the Controller
+       constructor needs the controlling ServiceWorker handle for
+       its MessageChannel handshake */
     const wasControlled = !!navigator.serviceWorker.controller;
     armControllerReload(wasControlled);
+    let sw: ServiceWorker | null = null;
     try {
-      await navigator.serviceWorker.register("/sw.js");
+      const reg = await navigator.serviceWorker.register("/sw.js");
       await navigator.serviceWorker.ready;
-      if (!navigator.serviceWorker.controller) {
+      sw = navigator.serviceWorker.controller ?? reg.active ?? null;
+      if (!sw && !wasControlled) {
         /* fresh install — wait briefly for claim() to take effect */
-        await waitFor(
-          () => !!navigator.serviceWorker.controller,
-          5000,
-          "service worker takeover"
-        ).catch(() => {});
+        await waitFor(() => !!navigator.serviceWorker.controller, 5000, "service worker takeover").catch(() => {});
+        sw = navigator.serviceWorker.controller;
+      }
+      if (!sw) {
+        throw new Error("the service worker did not become active");
       }
     } catch (err) {
-      throw new Error(
+      throw stageError(
+        "engine",
         "The proxy service worker could not register. Make sure the page is " +
         "loaded over HTTPS (not an insecure iframe) and site data is allowed. " +
         `(${err instanceof Error ? err.message : String(err)})`
       );
     }
 
+    /* stage 2 — self-heal the controller cookie database */
+    try {
+      await ensureControllerDB();
+    } catch (err) {
+      throw stageError(
+        "engine",
+        "A leftover proxy database from an earlier visit could not be cleared. " +
+        "Clear this site's data in your browser settings and try again. " +
+        `(${err instanceof Error ? err.message : String(err)})`
+      );
+    }
+
+    /* stage 3 — engine bundles (core → api → utils) */
+    try {
+      await ensureEngineBundles();
+    } catch (err) {
+      throw stageError(
+        "engine",
+        "The Scramjet engine scripts did not load. This is usually an ad-blocker, " +
+        "a school filter, or an old service worker from a previous visit. " +
+        `(${err instanceof Error ? err.message : String(err)})`
+      );
+    }
+
+    /* stage 4 — transport (epoxy default / libcurl) over wisp */
+    let transportObj: V2Transport;
+    try {
+      transportObj = await makeTransport(transport);
+    } catch (err) {
+      throw stageError(
+        "transport",
+        "The proxy transport could not start (epoxy/libcurl over the wisp relay). " +
+        "The relay may be down or WebSockets may be blocked on this network. " +
+        `(${err instanceof Error ? err.message : String(err)})`
+      );
+    }
+
+    /* stage 5 — Controller + wait() */
+    let controller: V2Controller;
+    try {
+      const { Controller } = window.$scramjetController!;
+      controller = new Controller({
+        serviceworker: sw,
+        transport: transportObj,
+        config: {
+          prefix: "/~/sj/",
+          scramjetPath: "/scram2/scramjet.js",
+          wasmPath: "/scram2/scramjet.wasm",
+          injectPath: "/controller/controller.inject.js",
+        },
+      });
+      await controller.wait();
+    } catch (err) {
+      throw stageError(
+        "engine",
+        "The Scramjet v2 engine could not initialize. " +
+        "Private-browsing restrictions or blocked site data can cause this. " +
+        `(${err instanceof Error ? err.message : String(err)})`
+      );
+    }
+
+    /* stage 6 — keepalive: the SW routes every proxied request back to
+       this page's controller; if the browser terminates the idle SW the
+       proxy dies. A 15s ping keeps it warm (official wiring pattern). */
+    setInterval(() => {
+      navigator.serviceWorker.controller?.postMessage("keepalive");
+    }, 15000);
+
     const handle: ProxyHandle = {
-      encodeUrl: (url: string) => controller.encodeUrl(url),
+      /* v2 has no public encodeUrl — see proxiedHref() below for the
+         detached-frame technique that keeps our href-based UI working */
+      encodeUrl: (url: string) => proxiedHrefSync(controller, url),
       controller,
     };
     window.__memphisProxy = handle;
@@ -456,20 +466,51 @@ export function bootProxy(): Promise<ProxyHandle> {
   return bootPromise;
 }
 
-/** Full reset — used by the Retry button after an error. */
+/* ---------------- URL encoding (detached-frame technique) ---------------- */
+
+/* v2 routes by per-frame prefix (/~/sj/<controller>/<frame>/…). A Frame's
+   go(url) encodes the target and sets element.src. We keep one DETACHED
+   encoder frame per encoded URL: the SW serves anything under its prefix
+   (the element never has to be in the DOM — routing is URL-prefix based),
+   so a pooled detached frame gives us a stable encoded href for our
+   src-driven iframes while the engine handles the actual rewriting. */
+
+const encoderFrames = new Map<string, V2Frame>();
+
+function proxiedHrefSync(controller: V2Controller, url: string): string {
+  const cached = encoderFrames.get(url);
+  if (cached) return cached.element.src;
+  const frame = controller.createFrame();
+  frame.go(url);
+  encoderFrames.set(url, frame);
+  return frame.element.src;
+}
+
+/* ---------------- transport switching ---------------- */
+
+/** Live-switch the transport (Settings → epoxy/libcurl). Takes effect
+    for new requests — the official demo's setTransport semantics. */
+export async function setProxyTransport(t: ProxyTransport): Promise<void> {
+  const handle = window.__memphisProxy;
+  if (!handle) return; /* not booted — bootProxy(transport) covers it */
+  const transportObj = await makeTransport(t);
+  handle.controller.setTransport(transportObj);
+}
+
+/** Forget the boot (used by the Retry button after a failure). */
 export function resetProxy(): void {
   bootPromise = null;
+  encoderFrames.clear();
   if (typeof window !== "undefined" && window.__memphisProxy) {
     delete window.__memphisProxy;
   }
-  resetTransport();
 }
 
 /* ---------------- convenience ---------------- */
 
 /** Turn a human URL/search into a proxied (scramjet-encoded) href. */
 export async function proxiedHref(rawUrl: string): Promise<string> {
-  const handle = await bootProxy();
+  const handle = window.__memphisProxy ?? (await bootProxy());
   return handle.encodeUrl(rawUrl);
 }
 

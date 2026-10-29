@@ -1,8 +1,9 @@
 # Memphis unBLACKed
 
-A full-stack, monochrome (pure black & white) web app — 2,817 real embedded
-games, 50 day-use apps, Spotify and YouTube through a self-hosted **Scramjet**
-web proxy, a free unlimited **GLM** AI chat, and a live community chat.
+A full-stack, monochrome (pure black & white) web app — 74 hand-verified
+popular games, 50 day-use apps, Spotify and YouTube through a self-hosted
+**Scramjet v2** web proxy, a free unlimited **GLM** AI chat, and a live
+community chat.
 
 > Single-page app at `/` with eight sections: **Home · Play · Apps · Chat · AI ·
 > Listen · Watch · Browse**.
@@ -18,52 +19,64 @@ web proxy, a free unlimited **GLM** AI chat, and a live community chat.
 | State | Zustand (client) · localStorage persistence |
 | Database | Prisma ORM + SQLite (`db/custom.db`) |
 | Realtime | Socket.io mini-service (`mini-services/chat-service`, port 3003) |
-| Proxy engine | Scramjet 1.1.0 (Mercury Workshop) + bare-mux 2.1.9 |
-| Transports | epoxy-transport 2.1.29 (default) · libcurl-transport 1.5.2 |
+| Proxy engine | Scramjet **2.0.67-alpha.2** + scramjet-controller 0.0.14 + scramjet-utils 0.0.3 |
+| Transports | epoxy-transport 3.0.2 (default) · libcurl-transport 2.0.6 |
 | Relay | Self-hosted wisp server (`mini-services/wisp-service`, port 3001) |
 | AI | GLM (glm-4-plus) via `z-ai-web-dev-sdk`, server-side only, streaming SSE |
-| Games | 2,799 HTML5 games from the GameMonetize public feed + 18 built-ins |
+| Games | 62 verified popular games (official sites, Scratch, GitHub Pages, KBHgames, Gameflare) + 12 built-ins |
 
 ## Architecture
 
 ```
 Browser
   └─ Memphis SPA (Next.js, port 3000)
-       ├─ /sw.js — Scramjet service worker intercepts /scramjet/* URLs
-       │    └─ bare-mux SharedWorker (/baremux/worker.js)
-       │         ├─ /epoxy/index.mjs   (EpoxyTransport, default)
-       │         └─ /libcurl/index.mjs (CurlTransport, optional)
-       │              └─ WebSocket → wisp relay (port 3001) → target site
-       ├─ /api/games    — 2,817-game catalog (search / categories / ids)
+       ├─ /sw.js — routes /~/sj/<controller>/<frame>/* requests
+       │    into the page-side Controller over a MessageChannel RPC
+       ├─ /scram2/scramjet.js + scramjet.wasm   (core rewriter)
+       ├─ /controller/controller.{api,sw,inject}.js
+       ├─ /utils/scramjet-utils.js               (plugins)
+       ├─ /epoxy/index.mjs · /libcurl/index.mjs  (transports, in-page)
+       │    └─ WebSocket → wisp relay (port 3001) → target site
+       ├─ /api/games    — 74-game catalog (search / categories / ids)
        ├─ /api/ai/*     — GLM chat (streaming SSE, no auth, no limits)
        ├─ /api/games/scores, /api/auth/*, /api/reports
        └─ chat-service  — socket.io community chat (port 3003)
 ```
 
-- **Vendored proxy assets** live in `public/`: `scram/` (engine + wasm),
-  `epoxy/`, `libcurl/`, `baremux/`, and `sw.js`.
+- **Scramjet v2 architecture**: no bare-mux, no SharedWorker. The transport
+  object lives in the page and the service worker routes proxied requests
+  back to it via a `$controller$init` MessageChannel handshake. Per-frame
+  URL prefixes (`/~/sj/<controller>/<frame>/…`) drive routing.
+- **Vendored proxy assets** live in `public/`: `scram2/` (core + wasm),
+  `controller/`, `utils/`, `epoxy/`, `libcurl/`, and `sw.js`. The v1 tree
+  (`scram/`, `baremux/`) is gone. Version-lock: the controller asserts the
+  core version at construction — always vendor matching builds together.
+- **URL encoding without a public encodeUrl**: v2 has none, so the app
+  pools *detached* encoder frames (`proxiedHref()` in
+  `src/lib/scramjet.ts`). `frame.go(url)` sets the encoded `element.src`,
+  and because routing is URL-prefix based (not element based), those
+  hrefs work in any iframe while the page's controller stays alive.
 - **Browser-compat shim** (`public/sharedworker-shim.js`, loaded first and
-  blocking): polyfills `SharedWorker` on Safari / iOS / Chrome-on-iOS with a
-  dedicated Worker (`public/sharedworker-wrapper.js`) that feeds the real
-  worker MessagePorts through a synthetic `connect` handshake, and installs
-  an in-memory `localStorage` when the browser blocks storage (managed
-  Chromebooks). Chrome/Firefox with native SharedWorker are untouched.
-- **Boot resilience** (`src/lib/scramjet.ts`): staged boot (engine → transport)
-  with plain-language errors, a diagnostics line on the error screen,
-  in-place **Retry** (re-injects the bundles if the static tags were blocked
-  by an extension), always re-registers `/sw.js` so stale workers from older
-  deployments are replaced, and reloads once on `controllerchange` if an old
-  worker was controlling the page.
-- **COOP/COEP headers** (`same-origin` / `credentialless`) are set in
-  `next.config.ts` — required by the transports (SharedArrayBuffer), while
-  `credentialless` keeps cross-origin game embeds and CDN thumbnails working.
-  Safari ignores `credentialless` (engine still works — only the legacy
-  sync-XHR shim degrades, which modern sites do not use).
+  blocking): keeps an in-memory `localStorage` when the browser blocks
+  storage (managed Chromebooks). The SharedWorker polyfill is retained for
+  safety but v2 no longer needs it — transports run in the page.
+- **Boot order** (`src/lib/scramjet.ts`): register `/sw.js` and wait for a
+  controlling worker → self-heal the `__scramjet_controller` IndexedDB →
+  load core → controller API → utils → instantiate the transport (epoxy or
+  libcurl, eagerly `init()`ed against wisp) → `new Controller({serviceworker,
+  transport, config})` → `await controller.wait()` → 15s keepalive pings
+  (the SW must stay alive to route). Plain-language staged errors
+  (engine vs transport) with a diagnostics line and in-place Retry.
+- **No COOP/COEP headers** (`next.config.ts`): v1 needed cross-origin
+  isolation for SharedArrayBuffer in its SharedWorker transports; v2 does
+  not, and the headers actively *blocked* direct game embeds like
+  classic.minecraft.net. Proxied content manages its own headers.
 - **The wisp URL** is computed at runtime as
   `ws(s)://<host>/wisp/?XTransformPort=3001&/` — the trailing `&/` is required
   (the wisp server switches to wsproxy mode if the URL does not end in `/`).
-- **Transport switching** is real: Settings → Browse → Transport re-calls
-  `BareMuxConnection.setTransport()` with the chosen module and wisp args.
+- **Transport switching** is live: Settings → Browse → Transport constructs
+  a fresh transport and hands it to `controller.setTransport()` — new
+  requests use it immediately, no reload.
 - **Wisp supervisor**: `scripts/supervise-wisp.sh` keeps the relay alive
   (restarts with backoff if it crashes). Start it once and forget it.
 
@@ -72,7 +85,7 @@ Browser
 ```bash
 bun install
 bun run db:push          # apply the Prisma schema
-bun scripts/fetch-games.mjs   # (re)build data/games.json from the GM feed
+node scripts/build-games-catalog.mjs   # (re)build + re-verify data/games.json
 
 # terminal 1 — wisp relay (required for the proxy), supervised
 bash scripts/supervise-wisp.sh   # foreground; or nohup it (see script header)
@@ -97,8 +110,11 @@ GLM SDK.
 
 ## Feature inventory
 
-- **Play** — 2,817 real games (2,799 from the GameMonetize feed + 18 built-in
-  canvas classics with server-side leaderboards). Search, 22 category filters,
+- **Play** — 74 hand-verified popular games (Minecraft Classic, Paper
+  Minecraft, Krunker, Shell Shockers, Slither, Diep, Smash Karts, Skribbl,
+  Retro Bowl, Slope, Run 3, Tunnel Rush, Moto X3M, FNF, Cookie Clicker,
+  Happy Wheels, Baldi's Basics, 2048, Tetris …) plus 12 built-in canvas
+  classics with server-side leaderboards. Search, 11 category filters,
   A–Z sorting, favorites & recents (localStorage), fullscreen player with a
   "load via proxy" fallback for stubborn embeds.
 - **Apps** — exactly 50 day-use apps (YouTube, Instagram, TikTok, ChatGPT,
@@ -129,27 +145,30 @@ GLM SDK.
 
 ## Data sources
 
-- Games: GameMonetize public feed (`gamemonetize.com/feed.php`) — real,
-  embeddable HTML5 games; catalog regenerated by `scripts/fetch-games.mjs`
-  (auto-resumes, rate-limit backoff, writes `data/games.json`).
-- App favicons: Google's public favicon service.
-- Proxy stack: Mercury Workshop's Scramjet / bare-mux / epoxy-transport /
-  libcurl-transport / wisp-js (vendored dist files, licenses AGPL/LGPL — see
-  `public/*/`).
+- Games: hand-curated catalog of popular titles, **live-verified at build
+  time** by `scripts/build-games-catalog.mjs` (HTTP 200, no frame-blocking
+  headers, real-iframe `Sec-Fetch-*` headers, spam/parked-domain detection;
+  anything dead is dropped automatically). Sources: official game sites,
+  Scratch `/embed` endpoints (Paper Minecraft, MMP), GitHub Pages / jsDelivr
+  open-source classics, KBHgames and Gameflare for Flash-era favorites.
+  Regenerate with `node scripts/build-games-catalog.mjs`.
+- Thumbnails: Google's public favicon service (recognizable brand marks).
+- Proxy stack: Mercury Workshop's Scramjet / epoxy-transport /
+  libcurl-transport / wisp-js (vendored dist files, AGPL — see `public/*/`).
 
 ## Troubleshooting — "Proxy engine failed to start"
 
 The error screen tells you which stage failed and shows a diagnostics line
-like `Safari · SW:y · ctl:y · SharedWorker:n · storage:y · engine:y`.
+like `Chrome · SW:y · ctl:y · SharedWorker:y · storage:y · engine:y`.
 
 | Symptom / diagnostics | Cause | Fix |
 | --- | --- | --- |
-| `SharedWorker:n` (Safari/iOS) | WebKit has no SharedWorker — old builds died here | Handled by the bundled polyfill; if you still see it, hard-refresh once to pick up the latest `/sharedworker-shim.js` |
 | `storage:n` | Browser blocks site data ("Block all cookies") | Allow site data for this site; an in-memory fallback keeps the session working either way |
-| `engine:n` persisting | An extension or filter blocks `/scram/scramjet.all.js` | Disable the ad-blocker for this site, then press **Retry** (the boot re-injects the scripts) |
+| `engine:n` persisting | An extension or filter blocks the engine scripts | Disable the ad-blocker for this site, then press **Retry** (the boot re-injects the scripts) |
 | `ctl:y` but pages error | A service worker from an older deployment is stale | Hard refresh; the app re-registers `/sw.js` and reloads itself once on takeover |
 | "Proxy transport failed" | The wisp relay is down or a network blocks WebSockets | Check the relay: `curl http://<host>/wisp/?XTransformPort=3001` (expect 200); the supervisor auto-restarts crashes. Try the other transport in Settings |
-| `Uh oh!` page inside the frame only | The relay was briefly down when the page loaded | Reload the frame (⟳) once the relay is back |
+| A game shows "Just a moment…" | That portal's Cloudflare challenge (KBHgames / Gameflare) | It resolves on its own in a normal browser; headless/automated browsers loop on it |
+| A game will not embed | Its server refuses iframes | Use **load via proxy** in the player footer, or **Report it** |
 
 Operational notes:
 
@@ -159,3 +178,5 @@ Operational notes:
   libcurl in Settings applies live without a reload.
 - The service worker caches nothing itself — a hard refresh always picks up
   the newest engine files.
+- Proxied tabs opened with "open in new tab (proxied)" are served by the
+  originating page's controller — keep the Memphis tab open.

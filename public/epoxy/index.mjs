@@ -1493,13 +1493,36 @@ var EpoxyTransport = class {
   async meta() {
   }
   async request(remote, method, body, headers, signal) {
-    if (body instanceof Blob)
-      body = await body.arrayBuffer();
+    if (body instanceof Blob) body = await body.arrayBuffer();
     try {
-      let res = await this.client.fetch(remote.href, { method, body, headers, redirect: "manual" });
+      let headersObj = {};
+      for (let [key, value] of headers) {
+        if (headersObj[key]) {
+          console.warn(
+            `Duplicate header key "${key}" detected. Overwriting previous value.`
+          );
+        }
+        headersObj[key] = value;
+      }
+      let res = await this.client.fetch(remote.href, {
+        method,
+        body,
+        headers: headersObj,
+        redirect: "manual"
+      });
+      let headersEntries = [];
+      for (let [key, value] of Object.entries(res.rawHeaders)) {
+        if (Array.isArray(value)) {
+          for (let v of value) {
+            headersEntries.push([key, v]);
+          }
+        } else {
+          headersEntries.push([key, value]);
+        }
+      }
       return {
         body: res.body,
-        headers: res.rawHeaders,
+        headers: headersEntries,
         status: res.status,
         statusText: res.statusText
       };
@@ -1510,16 +1533,30 @@ var EpoxyTransport = class {
   }
   connect(url, protocols, requestHeaders, onopen, onmessage, onclose, onerror) {
     let handlers = new EpoxyHandlers(
-      onopen,
-      onclose,
+      // epoxy does not support getting the server selected protocol/extension
+      () => onopen("", ""),
+      // epoxy does not support getting close code/reason
+      () => onclose(1e3, "Closed by remote"),
       onerror,
-      (data) => data instanceof Uint8Array ? onmessage(data.buffer) : onmessage(data)
+      (data) => (
+        //@ts-ignore
+        data instanceof Uint8Array ? onmessage(data.buffer) : onmessage(data)
+      )
     );
+    let headersObj = {};
+    for (let [key, value] of requestHeaders) {
+      if (headersObj[key]) {
+        console.warn(
+          `Duplicate header key "${key}" detected. Overwriting previous value.`
+        );
+      }
+      headersObj[key] = value;
+    }
     let ws = this.client.connect_websocket(
       handlers,
       url.href,
       protocols,
-      Object.assign(requestHeaders)
+      headersObj
     );
     return [
       async (data) => {

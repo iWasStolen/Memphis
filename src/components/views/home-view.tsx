@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const QUICK = [
-  { icon: Gamepad2, label: "Play", desc: "2,700+ games", view: "play" as const },
+  { icon: Gamepad2, label: "Play", desc: "74 popular games", view: "play" as const },
   { icon: Boxes, label: "Apps", desc: "50 real apps", view: "apps" as const },
   { icon: MessagesSquare, label: "Chat", desc: "Community", view: "chat" as const },
   { icon: Sparkles, label: "AI", desc: "GLM · free · unlimited", view: "ai" as const },
@@ -30,7 +30,7 @@ const QUICK = [
 const FEATURES = [
   {
     icon: Gamepad2,
-    name: "2,700+ embedded games",
+    name: "74 popular games, hand-verified",
     body: "A full HTML5 arcade: action, racing, puzzle, sports, two-player and .io games streamed from a real game network, plus 18 classics that ship inside the app. Search, filter by category, favorite the ones you love and play fullscreen — every card launches a real, playable game.",
   },
   {
@@ -82,7 +82,7 @@ export default function HomeView() {
             Everything, unblocked.
           </h1>
           <p className="mt-5 text-sm sm:text-base text-[#9a9a9a] max-w-2xl mx-auto leading-relaxed">
-            2,700+ embedded games, 50 real apps, Spotify, YouTube and an unlimited
+            74 popular games, 50 real apps, Spotify, YouTube and an unlimited
             GLM-powered AI — all running on a Scramjet proxy that renders the real
             web inside this page. Pure black and white, nothing else.
           </p>
@@ -92,7 +92,7 @@ export default function HomeView() {
               className="bg-white text-black hover:bg-[#e0e0e0]"
             >
               <Gamepad2 className="size-4 mr-2" />
-              Play 2,700+ games
+              Play 74 popular games
             </Button>
             <Button
               variant="outline"
