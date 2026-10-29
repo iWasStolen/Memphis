@@ -1,77 +1,77 @@
 {
- "generatedAt": "2026-10-29T07:00:14.811Z",
- "source": "hand-curated popular games + GameFlare most-played catalog (verified embeddable) + built-in",
- "total": 1574,
+ "generatedAt": "2026-10-29T22:12:28.844Z",
+ "source": "hand-curated popular games + tung tung reference picks (verified embeddable) + GameFlare most-played catalog (verified embeddable) + built-in",
+ "total": 1680,
  "categories": [
   {
    "slug": "arcade",
    "label": "Arcade",
-   "count": 212
+   "count": 223
   },
   {
    "slug": "action",
    "label": "Action",
-   "count": 177
+   "count": 178
   },
   {
    "slug": "racing",
    "label": "Racing",
-   "count": 140
+   "count": 148
   },
   {
    "slug": "simulation",
    "label": "Simulation",
-   "count": 117
+   "count": 122
   },
   {
    "slug": "shooter",
    "label": "Shooter",
-   "count": 115
+   "count": 119
   },
   {
    "slug": "casual",
    "label": "Casual",
-   "count": 113
+   "count": 118
   },
   {
    "slug": "horror",
    "label": "Horror",
-   "count": 102
-  },
-  {
-   "slug": "io",
-   "label": ".io Arena",
-   "count": 78
-  },
-  {
-   "slug": "sports",
-   "label": "Sports",
-   "count": 77
-  },
-  {
-   "slug": "sandbox",
-   "label": "Sandbox",
-   "count": 68
+   "count": 104
   },
   {
    "slug": "rhythm",
    "label": "Rhythm",
-   "count": 67
+   "count": 86
   },
   {
-   "slug": "strategy",
-   "label": "Strategy",
-   "count": 66
+   "slug": "io",
+   "label": ".io Arena",
+   "count": 80
   },
   {
    "slug": "platformer",
    "label": "Platformer",
-   "count": 64
+   "count": 80
+  },
+  {
+   "slug": "sports",
+   "label": "Sports",
+   "count": 79
+  },
+  {
+   "slug": "sandbox",
+   "label": "Sandbox",
+   "count": 75
   },
   {
    "slug": "puzzle",
    "label": "Puzzle",
-   "count": 62
+   "count": 73
+  },
+  {
+   "slug": "strategy",
+   "label": "Strategy",
+   "count": 70
   },
   {
    "slug": "adventure",
@@ -86,22 +86,22 @@
   {
    "slug": "fighting",
    "label": "fighting",
-   "count": 14
+   "count": 16
   },
   {
    "slug": "classic",
    "label": "Classics",
-   "count": 13
+   "count": 14
   },
   {
    "slug": "idle",
    "label": "Idle",
-   "count": 8
+   "count": 11
   },
   {
    "slug": "two-player",
    "label": "2 Player",
-   "count": 6
+   "count": 9
   },
   {
    "slug": "trivia",
@@ -1118,6 +1118,1743 @@
     "family-feud"
    ],
    "th": "https://www.google.com/s2/favicons?sz=128&domain=googlefeud.com",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-vex-3",
+   "t": "Vex 3",
+   "d": "More acts, more traps, more wall-jumps — the fan-favorite Vex.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m9e3de5d/index.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "vex",
+    "stickman",
+    "parkour"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m9e3de5d/vex3.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-drive-mad",
+   "t": "Drive Mad",
+   "d": "Keep the jeep upright over wobbly obstacle courses. Simple controls, maddening physics — drive fast, land clean.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m602c706/index.html",
+   "px": 0,
+   "c": "racing",
+   "g": [
+    "physics",
+    "obstacle"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m602c706/logo.jpg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-vex-6",
+   "t": "Vex 6",
+   "d": "The trickiest acts yet — swing on poles, ride platforms, dodge the newer traps.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/me331dac/index.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "vex",
+    "stickman",
+    "parkour"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/me331dac/assets/icon.jpeg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-minecraft-188",
+   "t": "Minecraft 1.8.8",
+   "d": "The legendary 1.8.8 era of Minecraft — the version PvP players never let go of.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/181.html",
+   "px": 0,
+   "c": "sandbox",
+   "g": [
+    "minecraft",
+    "eaglercraft",
+    "pvp"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/181.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-geometry-dash",
+   "t": "Geometry Dash",
+   "d": "Jump and fly through rhythm-based obstacle gauntlets. One-touch controls, brutal difficulty, iconic soundtrack.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/785-upd2.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "geometry-dash",
+    "rhythm"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/785.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-animal-crossing-population-growing",
+   "t": "Animal Crossing: Population Growing!",
+   "d": "The GameCube original. Settle into a village of talking animals — fish, dig, decorate and pay off your mortgage to Tom Nook.",
+   "u": "https://vcsasecrly.365-24-7.de/k/ma07e63f/index.html",
+   "px": 0,
+   "c": "simulation",
+   "g": [
+    "animal-crossing",
+    "life-sim"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/k/ma07e63f/cover.webp",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-tung-tung-horror",
+   "t": "Tung Tung Horror",
+   "d": "Tung Tung Sahur turns horror. Survive the night while the drum-wielding figure hunts you through the dark.",
+   "u": "https://vcsasecrly.365-24-7.de/k/m1bd901e/index.html",
+   "px": 0,
+   "c": "horror",
+   "g": [
+    "tung-tung-sahur",
+    "meme"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/k/m1bd901e/cover.webp",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-minecraft-1122",
+   "t": "Minecraft 1.12.2",
+   "d": "Full Minecraft in the browser — the classic 1.12.2 world update. Build, mine, craft and survive.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/182.html",
+   "px": 0,
+   "c": "sandbox",
+   "g": [
+    "minecraft",
+    "eaglercraft"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/182.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-vex-1",
+   "t": "Vex 1",
+   "d": "Where it all started. Guide the stickman through acts of spikes, saws and traps.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/45.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "vex",
+    "stickman",
+    "parkour"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/45.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-coffee-talk",
+   "t": "Coffee Talk",
+   "d": "Brew drinks for Seattle's fantasy regulars — vampires, elves and mermaids included — in this cozy late-night coffee shop sim.",
+   "u": "https://vcsasecrly.365-24-7.de/k/m7abccbc/index.html",
+   "px": 0,
+   "c": "simulation",
+   "g": [
+    "cozy",
+    "coffee"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/k/m7abccbc/cover.webp",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-vex-3-xmas",
+   "t": "Vex 3 XMAS",
+   "d": "Vex 3 in a winter coat — same brutal parkour, festive decoration.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/48.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "vex",
+    "stickman",
+    "christmas"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/48.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnaf-sisters-location",
+   "t": "FNAF: Sisters Location",
+   "d": "Run the night shift at Circus Baby's underground party facility. Watch the animatronics, mind the vents, survive until morning.",
+   "u": "https://vcsasecrly.365-24-7.de/k/m82f1403/index.html",
+   "px": 0,
+   "c": "horror",
+   "g": [
+    "fnaf",
+    "animatronics"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/k/m82f1403/cover.webp",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-vex-8",
+   "t": "Vex 8",
+   "d": "The newest mainline Vex — the stickman parkour formula at its most polished.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/53.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "vex",
+    "stickman",
+    "parkour"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/53.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-a-difficult-game-about-climbing",
+   "t": "A Difficult Game About Climbing",
+   "d": "One man, one hammer, one slippery mountain. A rage-inducing physics climb — one mistake and you slide all the way back down.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/672-2.html",
+   "px": 0,
+   "c": "arcade",
+   "g": [
+    "rage",
+    "physics"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/672.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-bitlife",
+   "t": "BitLife",
+   "d": "Live a whole life from crib to grave — school, jobs, crime, marriage. Every choice writes your obituary.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m736522e/index.html",
+   "px": 0,
+   "c": "simulation",
+   "g": [
+    "life-sim",
+    "text"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m736522e/splash.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-animal-crossing-wild-world",
+   "t": "Animal Crossing: Wild World",
+   "d": "The DS favorite in the browser — same cozy village life, touch-era charm.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m551560d/mb4e0841.html",
+   "px": 0,
+   "c": "simulation",
+   "g": [
+    "animal-crossing",
+    "life-sim"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m32b788d/m2c55ee8.avif",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-getaway-shootout",
+   "t": "Getaway Shootout",
+   "d": "Two racers, one getaway. Gun, jump and grapple past your friend to the extraction point first.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m72b48b1/index.html",
+   "px": 0,
+   "c": "two-player",
+   "g": [
+    "ragdoll",
+    "shooting",
+    "race"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m72b48b1/img/images.jpg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-slope-2",
+   "t": "Slope 2",
+   "d": "The endless neon ball-roller returns — faster, steeper, glitchier. Chase high scores down the shifting hill.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/meb5223c/index.html",
+   "px": 0,
+   "c": "racing",
+   "g": [
+    "slope",
+    "endless",
+    "3d"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/meb5223c/fullscreen-button.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-soccer-random",
+   "t": "Soccer Random",
+   "d": "Ragdoll two-button soccer. Timing is everything — and so is luck.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m727113d/index.html",
+   "px": 0,
+   "c": "sports",
+   "g": [
+    "random-series",
+    "two-player",
+    "ragdoll"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m727113d/splash.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-tiny-fishing",
+   "t": "Tiny Fishing",
+   "d": "The addictive cast-and-upgrade fisher. Angle for deeper, rarer, weirder fish every run.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m18f2aef/index.html",
+   "px": 0,
+   "c": "casual",
+   "g": [
+    "fishing",
+    "upgrade"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m18f2aef/thumb.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-stickman-hook",
+   "t": "Stickman Hook",
+   "d": "Swing through hundreds of short levels Spider-Man style. Tap to attach, release to fly.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/mb085045/index.html",
+   "px": 0,
+   "c": "arcade",
+   "g": [
+    "swing",
+    "momentum"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/mb085045/unnamed.jpg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-geometry-dash-lite",
+   "t": "Geometry Dash Lite",
+   "d": "The free chapter of Geometry Dash — same rhythm, same rage, zero cost.",
+   "u": "https://vcsasecrly.365-24-7.de/study/mb173ad6/index.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "geometry-dash",
+    "rhythm"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/thumbnails/m8b55e93.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-doodle-jump",
+   "t": "Doodle Jump",
+   "d": "Bounce up an endless hand-drawn tower. Mind the black holes and broken platforms.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/mb749462/index.html",
+   "px": 0,
+   "c": "arcade",
+   "g": [
+    "endless",
+    "vertical"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/mb749462/doodle.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-idle-breakout",
+   "t": "Idle Breakout",
+   "d": "The idle-game take on Breakout — buy balls, upgrade damage, break bricks while you sleep.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m9993987/index.html",
+   "px": 0,
+   "c": "idle",
+   "g": [
+    "breakout",
+    "upgrade"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m9993987/img/thumbnail.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-among-us",
+   "t": "Among Us",
+   "d": "The social deduction hit. Fix the ship, find the impostor — or lie your way to victory.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m551560d/m5b7a6a5.html",
+   "px": 0,
+   "c": "strategy",
+   "g": [
+    "social-deduction",
+    "space"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m32b788d/me69ae31.avif",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-learn-to-fly",
+   "t": "Learn to Fly",
+   "d": "The original: a penguin, a ramp and stubborn physics. Glide farther with every run.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m1ec132f/index.html",
+   "px": 0,
+   "c": "arcade",
+   "g": [
+    "launcher",
+    "penguin"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m1ec132f/learntofly.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-subway-surfers",
+   "t": "Subway Surfers",
+   "d": "Dash down the tracks, dodge the trains and outrun the inspector. The endless-runner juggernaut.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m3c17a22/index.html",
+   "px": 0,
+   "c": "arcade",
+   "g": [
+    "endless-runner",
+    "dodge"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/favicon.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-minecraft-152",
+   "t": "Minecraft 1.5.2",
+   "d": "The classic 1.5 Redstone Update era of Minecraft, in your browser.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/297.html",
+   "px": 0,
+   "c": "sandbox",
+   "g": [
+    "minecraft",
+    "eaglercraft"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/297.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-vex-challenges",
+   "t": "Vex Challenges",
+   "d": "Vex goes level-based: short, sharp challenge runs against the clock.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/54.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "vex",
+    "challenge"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/54.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-minecraft-beta-173",
+   "t": "Minecraft Beta 1.7.3",
+   "d": "Old-school Beta — the version nostalgia servers keep alive. No hunger, no sprinting, pure blocks.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/300.html",
+   "px": 0,
+   "c": "sandbox",
+   "g": [
+    "minecraft",
+    "beta",
+    "nostalgia"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/300.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-two-ball-3d",
+   "t": "Two Ball 3D",
+   "d": "Endless 3D runner for one or two players — same track, first to fall loses.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m551560d/me9f8ab1.html",
+   "px": 0,
+   "c": "racing",
+   "g": [
+    "endless",
+    "two-player"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m32b788d/mb0d52ae.avif",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-only-up",
+   "t": "Only Up",
+   "d": "A vertical climb through a sky of floating junk. No saves — one fall is a very long fall.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m551560d/m0855f9c.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "vertical",
+    "climb",
+    "no-save"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m32b788d/m6547901.avif",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-clicker-heroes",
+   "t": "Clicker Heroes",
+   "d": "Click monsters, hire heroes, automate everything. The comfy clicker that fueled a genre.",
+   "u": "https://vcsasecrly.365-24-7.de/study/m1fa5e38/index.html",
+   "px": 0,
+   "c": "idle",
+   "g": [
+    "clicker",
+    "rpg"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/thumbnails/mbb5287e.jpg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-minecraft-pocket-edition",
+   "t": "Minecraft Pocket Edition",
+   "d": "The mobile edition's early build — the whole pocket Minecraft experience in your browser.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/754.html",
+   "px": 0,
+   "c": "sandbox",
+   "g": [
+    "minecraft",
+    "pocket"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/754.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-minecraft-alpha-126",
+   "t": "Minecraft Alpha 1.2.6",
+   "d": "Back to Alpha: no beds, no banners, just you and an infinite blocky world.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/298.html",
+   "px": 0,
+   "c": "sandbox",
+   "g": [
+    "minecraft",
+    "alpha",
+    "nostalgia"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/298.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-suika",
+   "t": "Suika",
+   "d": "The watermelon game: drop and merge fruit, aim for the big melon, never overflow the jar.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m551560d/m86674f5.html",
+   "px": 0,
+   "c": "puzzle",
+   "g": [
+    "merge",
+    "fruit",
+    "physics"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m32b788d/m6912dbd.avif",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-superfighters",
+   "t": "Superfighters",
+   "d": "Chunky 2D brawls with guns, grenades and brutal physics. Couch-warfare chaos for two.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m551560d/mefc7650.html",
+   "px": 0,
+   "c": "fighting",
+   "g": [
+    "stickman",
+    "guns",
+    "chaos"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m32b788d/mbc03fa2.avif",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-territory-war",
+   "t": "Territory War",
+   "d": "Turn-based stickman squad combat — grenades, rifles and carefully placed jumps.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m551560d/md08a13b.html",
+   "px": 0,
+   "c": "strategy",
+   "g": [
+    "turn-based",
+    "stickman"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m32b788d/m92af209.avif",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-tank-trouble-2",
+   "t": "Tank Trouble 2",
+   "d": "Maze-tank duels where your own bullets bounce right back at you. Classic classroom warfare.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/mfa3ac49/index.html",
+   "px": 0,
+   "c": "two-player",
+   "g": [
+    "tanks",
+    "maze",
+    "bullets"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/mfa3ac49/tank.jpeg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-learn-to-fly-idle",
+   "t": "Learn to Fly Idle",
+   "d": "The Learn to Fly spin on idles — click, upgrade and snowball your way to orbit.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/343.html",
+   "px": 0,
+   "c": "idle",
+   "g": [
+    "clicker",
+    "snowball"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/343.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-time-shooter-2",
+   "t": "Time Shooter 2",
+   "d": "Time moves only when you do. Dodge bullets in slow motion and plan every single shot.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/200.html",
+   "px": 0,
+   "c": "shooter",
+   "g": [
+    "superhot-like",
+    "slow-motion"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/200.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-earn-to-die-2",
+   "t": "Earn to Die 2",
+   "d": "Plow through zombie hordes with an armored car, earn cash, upgrade the wreck, repeat.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m551560d/m790b050.html",
+   "px": 0,
+   "c": "racing",
+   "g": [
+    "zombies",
+    "upgrade",
+    "car"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m32b788d/mf3e74e0.avif",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-ovo",
+   "t": "OvO",
+   "d": "Momentum platforming with slides, wall-runs and coyote jumps. Built for speedruns.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/1-fde.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "momentum",
+    "speedrun"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/1.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-boxhead-2play-rooms",
+   "t": "Boxhead: 2Play Rooms",
+   "d": "Endless zombie waves, one boxhead, upgradeable guns. The co-op flash classic.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m551560d/m3aafda1.html",
+   "px": 0,
+   "c": "shooter",
+   "g": [
+    "zombies",
+    "co-op",
+    "flash"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m32b788d/me5cc7b6.avif",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-minecraft-1214",
+   "t": "Minecraft 1.21.4",
+   "d": "The newest world update playable in the browser — trial chambers, the breeze and all.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/183.html",
+   "px": 0,
+   "c": "sandbox",
+   "g": [
+    "minecraft",
+    "eaglercraft"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/183.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-bowmasters",
+   "t": "Bowmasters",
+   "d": "Aim, angle, annihilate. Ragdoll archery duels with dozens of unlockable characters.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/0.html",
+   "px": 0,
+   "c": "action",
+   "g": [
+    "aim",
+    "ragdoll",
+    "duel"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/0.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-crazy-cattle-3d",
+   "t": "Crazy Cattle 3D",
+   "d": "The viral battle royale where everyone rides battle cattle. Bump every cow off the island.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/164-temp2.html",
+   "px": 0,
+   "c": "io",
+   "g": [
+    "battle-royale",
+    "cows",
+    "viral"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/164.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-noob-steve-parkour",
+   "t": "Noob Steve Parkour",
+   "d": "Minecraft-styled block parkour — jump from cube to cube, no checkpoints, no mercy.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/mb7275f1/index.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "minecraft-style",
+    "jumps"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/mb7275f1/512x512.jpg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-block-craft-parkour",
+   "t": "Block Craft Parkour",
+   "d": "More blocky parkour runs — time your jumps across floating voxel platforms.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m551560d/m57659a3.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "blocky",
+    "jumps"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m32b788d/mf871eff.avif",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-bob-the-robber",
+   "t": "Bob the Robber",
+   "d": "Sneak through houses, dodge cameras and steal back the goods. The stealth-puzzle classic.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m551560d/m91c636b.html",
+   "px": 0,
+   "c": "puzzle",
+   "g": [
+    "stealth",
+    "heist"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m32b788d/m3f067a6.avif",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-bob-the-robber-2",
+   "t": "Bob the Robber 2",
+   "d": "Bob's back — more guards, more gadgets, more elaborate heists.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m4a8fa8c/index.html",
+   "px": 0,
+   "c": "puzzle",
+   "g": [
+    "stealth",
+    "heist"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m4a8fa8c/splash.jpeg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-bad-ice-cream-2",
+   "t": "Bad Ice Cream 2",
+   "d": "Slick your way through more frosty mazes — tougher monsters, new ice tricks.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m5a1edb4/index.html",
+   "px": 0,
+   "c": "arcade",
+   "g": [
+    "maze",
+    "ice",
+    "co-op"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m5a1edb4/bad-ice-cream-2.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-bad-ice-cream-3",
+   "t": "Bad Ice Cream 3",
+   "d": "The freeze-'em-all finale: 36 levels and a pile of new mechanics.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m43f5be1/index.html",
+   "px": 0,
+   "c": "arcade",
+   "g": [
+    "maze",
+    "ice",
+    "co-op"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m43f5be1/bad-ice-cream-3.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-bloons-td-1",
+   "t": "Bloons TD 1",
+   "d": "The tower defense that started it all — dart monkeys versus endless balloons.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m753e216/index.html",
+   "px": 0,
+   "c": "strategy",
+   "g": [
+    "tower-defense",
+    "monkeys",
+    "balloons"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m753e216/bloonstd.jpg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-retro-bowl-college",
+   "t": "Retro Bowl College",
+   "d": "Retro Bowl on campus — recruit, redshirt and coach your college roster to the championship.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/34-fixed.html",
+   "px": 0,
+   "c": "sports",
+   "g": [
+    "retro-bowl",
+    "football",
+    "management"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/34.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-bloons-td-2",
+   "t": "Bloons TD 2",
+   "d": "More towers, more bloon types, more popping. The monkey army grows.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m8a24283/index.html",
+   "px": 0,
+   "c": "strategy",
+   "g": [
+    "tower-defense",
+    "monkeys",
+    "balloons"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m8a24283/bloonstd2.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-worlds-hardest-game-2",
+   "t": "World's Hardest Game 2",
+   "d": "It's back and it's somehow harder. Move the square, dodge the dots, question your choices.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m16a862c/index.html",
+   "px": 0,
+   "c": "arcade",
+   "g": [
+    "rage",
+    "reflex"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m16a862c/the-worlds-hardest-game-2.jpg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-paperio-3d",
+   "t": "Paper.io 3D",
+   "d": "Claim territory on a spinning 3D globe. Cut off rivals before they cut you off.",
+   "u": "https://vcsasecrly.365-24-7.de/study/mc0ea993/index.html",
+   "px": 0,
+   "c": "io",
+   "g": [
+    "territory",
+    "3d"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/thumbnails/mb5376dc.jpg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-zombotron-2",
+   "t": "Zombotron 2",
+   "d": "Shoot and loot your way across a zombie-infested mining planet. Flash-era action gold.",
+   "u": "https://vcsasecrly.365-24-7.de/study/mcb92f25/index.html",
+   "px": 0,
+   "c": "shooter",
+   "g": [
+    "zombies",
+    "flash",
+    "planet"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/thumbnails/m7d20a38.jpg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-swords-and-sandals",
+   "t": "Swords and Sandals",
+   "d": "Build a gladiator and fight your way up the arena ladder. The classic flash RPG-fighter.",
+   "u": "https://vcsasecrly.365-24-7.de/study/m44dc917/index.html",
+   "px": 0,
+   "c": "fighting",
+   "g": [
+    "gladiator",
+    "rpg"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/thumbnails/m8c6fd6b.jpg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-duck-life-2",
+   "t": "Duck Life 2",
+   "d": "A bigger training grind and the world championship of duck racing.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m6cbd54a/index.html",
+   "px": 0,
+   "c": "casual",
+   "g": [
+    "duck-life",
+    "training",
+    "racing"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m6cbd54a/ducklife2.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-duck-life-battle",
+   "t": "Duck Life Battle",
+   "d": "The Duck Life spin on RPG battles — train stats and win turn-by-turn fights.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m551560d/m260d972.html",
+   "px": 0,
+   "c": "casual",
+   "g": [
+    "duck-life",
+    "rpg",
+    "battles"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m32b788d/m7c28c46.avif",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-gun-mayhem-2",
+   "t": "Gun Mayhem 2",
+   "d": "Knock your friends off the platform in chaotic gun-battles — dozens of weapons, modes and maps.",
+   "u": "https://vcsasecrly.365-24-7.de/study/m69445f7/index.html",
+   "px": 0,
+   "c": "two-player",
+   "g": [
+    "platform-shooter",
+    "party"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/thumbnails/ma7cb3ce.jpg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-duck-life-3",
+   "t": "Duck Life 3",
+   "d": "Evolve your duck's specialist class and race the world all over again.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/maae2b56/index.html",
+   "px": 0,
+   "c": "casual",
+   "g": [
+    "duck-life",
+    "evolution"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/maae2b56/duck.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-riddle-school",
+   "t": "Riddle School",
+   "d": "Help Phil escape the world's most escapable school. The point-and-click classic.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/ma671409/index.html",
+   "px": 0,
+   "c": "puzzle",
+   "g": [
+    "escape",
+    "point-and-click"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/ma671409/riddleschool.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-burrito-bison-launcha-libre",
+   "t": "Burrito Bison: Launcha Libre",
+   "d": "Launch the luchador, squash gummy bears, buy absurd upgrades. The beloved launcher classic.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/78.html",
+   "px": 0,
+   "c": "arcade",
+   "g": [
+    "launcher",
+    "upgrade"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/78.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-riddle-school-2",
+   "t": "Riddle School 2",
+   "d": "Phil's out… and immediately stuck again. New school, new riddles.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m418034e/index.html",
+   "px": 0,
+   "c": "puzzle",
+   "g": [
+    "escape",
+    "point-and-click"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m418034e/riddleschool2.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-riddle-school-3",
+   "t": "Riddle School 3",
+   "d": "The biggest, funniest escape of the series.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/mda5612b/index.html",
+   "px": 0,
+   "c": "puzzle",
+   "g": [
+    "escape",
+    "point-and-click"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/mda5612b/riddleschool3.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-raft",
+   "t": "Raft",
+   "d": "Stranded on a tiny raft on an endless ocean — fish, collect, expand, survive.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/457.html",
+   "px": 0,
+   "c": "simulation",
+   "g": [
+    "survival",
+    "ocean"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/457.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-riddle-school-4",
+   "t": "Riddle School 4",
+   "d": "Short, weird and legendary. No spoilers.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/maf3f6d6/index.html",
+   "px": 0,
+   "c": "puzzle",
+   "g": [
+    "escape",
+    "point-and-click"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/maf3f6d6/riddleschool4.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-riddle-school-5",
+   "t": "Riddle School 5",
+   "d": "The alien-finale of the Riddle School saga.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/mc666ec2/index.html",
+   "px": 0,
+   "c": "puzzle",
+   "g": [
+    "escape",
+    "point-and-click"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/mc666ec2/riddleschool5.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-moto-x3m-2",
+   "t": "Moto X3M 2",
+   "d": "More flipping, more spikes, more checkpoints. The sequel cranks everything up.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/mf870cfd/index.html",
+   "px": 0,
+   "c": "racing",
+   "g": [
+    "moto-x3m",
+    "stunts",
+    "checkpoints"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/favicon.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-dreadhead-parkour",
+   "t": "Dreadhead Parkour",
+   "d": "Flip, slide and wall-run through rooftop courses as a parkour master.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/310.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "parkour",
+    "rooftops"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/310.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-thing-thing-arena-3",
+   "t": "Thing-Thing Arena 3",
+   "d": "Fast top-down arena killing fields. Weapons everywhere, cover nowhere.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/780.html",
+   "px": 0,
+   "c": "shooter",
+   "g": [
+    "arena",
+    "flash"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/780.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-moto-x3m-spooky",
+   "t": "Moto X3M Spooky",
+   "d": "The Halloween level pack — pumpkins, skeletons and headless stunts.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m9c92efd/index.html",
+   "px": 0,
+   "c": "racing",
+   "g": [
+    "moto-x3m",
+    "halloween"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m9c92efd/splash.jpeg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-bubble-shooter",
+   "t": "Bubble Shooter",
+   "d": "Aim, shoot, pop. The endless color-matching classic — clear the board before it sinks.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m551560d/mf187eee.html",
+   "px": 0,
+   "c": "puzzle",
+   "g": [
+    "match-3",
+    "classic"
+   ],
+   "th": "https://cdn.jsdelivr.net/gh/zennedu/hydra@4afc772e861d3df34427623bbc4afa7ce1fbb067/m32b788d/ma47f774.avif",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-rainbow-obby",
+   "t": "Rainbow Obby",
+   "d": "The Roblox-style rainbow tower obby. Climb past colorful traps all the way to the top.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/307.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "obby",
+    "roblox-style",
+    "tower"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/307.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-tron",
+   "t": "Tron",
+   "d": "Light-cycle duel: draw walls of light, trap your rival, never crash first. The arcade legend.",
+   "u": "https://vcsasecrly.365-24-7.de/study/m18a7511/index.html",
+   "px": 0,
+   "c": "classic",
+   "g": [
+    "light-cycles",
+    "arcade"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/thumbnails/m3a447b0.jpg",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-worlds-hardest-game-4",
+   "t": "World's Hardest Game 4",
+   "d": "Four times the levels, four times the pain. You asked for this.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/105.html",
+   "px": 0,
+   "c": "arcade",
+   "g": [
+    "rage",
+    "reflex"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/105.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-duck-life-1",
+   "t": "Duck Life 1",
+   "d": "Train your duckling — running, flying, swimming — then race for the championship crown.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/234.html",
+   "px": 0,
+   "c": "casual",
+   "g": [
+    "duck-life",
+    "training",
+    "racing"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/234.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-vs-tricky",
+   "t": "FNF': vs. Tricky",
+   "d": "The Clown Violent horror himself steps into the rap ring. Chaotic charts, iconic mod.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/481.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod",
+    "horror"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/481.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fireboy-and-watergirl-3",
+   "t": "Fireboy and Watergirl 3",
+   "d": "The elemental duo hits the Ice Temple — light and shadow puzzles built for two.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/89.html",
+   "px": 0,
+   "c": "puzzle",
+   "g": [
+    "co-op",
+    "elemental"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/89.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fancy-pants-adventure-3",
+   "t": "Fancy Pants Adventure 3",
+   "d": "The biggest Fancy Pants world yet — golf clubs, pirates and piratical pants.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/335.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "fancy-pants",
+    "flow"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/335.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fireboy-and-watergirl-4",
+   "t": "Fireboy and Watergirl 4",
+   "d": "Crystal Temple portal puzzles — solo or with a friend at one keyboard.",
+   "u": "https://vcsasecrly.365-24-7.de/k/mfe6d8a8/index.html",
+   "px": 0,
+   "c": "puzzle",
+   "g": [
+    "co-op",
+    "portals"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/k/mfe6d8a8/cover.webp",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-madalin-stunt-cars-2",
+   "t": "Madalin Stunt Cars 2",
+   "d": "The sandbox stunt-driving favorite — drift, flip and crash supercars around empty lots.",
+   "u": "https://cdn.jsdelivr.net/gh/zennedu/3kh@aba902390fff20765e8e11e4b631b6e5664e17c3/m6592c2c/index.html",
+   "px": 0,
+   "c": "racing",
+   "g": [
+    "stunts",
+    "supercars",
+    "sandbox"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/favicon.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-worlds-hardest-game-3",
+   "t": "World's Hardest Game 3",
+   "d": "Third round of the infamous reflex torture test.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/104.html",
+   "px": 0,
+   "c": "arcade",
+   "g": [
+    "rage",
+    "reflex"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/104.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-moto-x3m-3",
+   "t": "Moto X3M 3",
+   "d": "New stunts, new saws, same glorious flipping death.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/98.html",
+   "px": 0,
+   "c": "racing",
+   "g": [
+    "moto-x3m",
+    "stunts"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/98.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fancy-pants-adventure-2",
+   "t": "Fancy Pants Adventure 2",
+   "d": "The stickman with the fancy pants returns — flowy slopes, squiggles and spiders.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/334.html",
+   "px": 0,
+   "c": "platformer",
+   "g": [
+    "fancy-pants",
+    "flow"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/334.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-vs-shaggy",
+   "t": "FNF vs Shaggy",
+   "d": "Scooby's snack master goes ultra instinct. Meme charts, zero mercy.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/559.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod",
+    "meme"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/559.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-vs-hex",
+   "t": "FNF': Vs. Hex",
+   "d": "The wholesome robot basketballer with smooth original tracks.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/476.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/476.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-vs-tabi",
+   "t": "FNF vs Tabi",
+   "d": "The vengeful ex-producer — a mod famous for its aggressive final track.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/714.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/714.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-vs-sky",
+   "t": "FNF VS. Sky",
+   "d": "The pastel stalker-girlfriend mod with cult-favorite songs.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/556.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/556.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-vs-zardy",
+   "t": "FNF vs Zardy",
+   "d": "The scarecrow of Zardy's Farm haunts the charts.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/715.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod",
+    "horror"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/715.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-vs-whitty",
+   "t": "FNF': V.S. Whitty",
+   "d": "The hot-headed bomb mod that lit up the FNF scene.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/474.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/474.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-marios-madness",
+   "t": "FNF': Mario's Madness",
+   "d": "The creepypasta Mario universe — horror charts with legendary songs.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/582.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod",
+    "creepypasta"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/582.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-vs-kapi",
+   "t": "FNF VS. KAPI",
+   "d": "The arcade cat behind the keyboard — tight, sync-heavy charts.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/555.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/555.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-vs-qt",
+   "t": "FNF': vs. QT",
+   "d": "Sweet, pastel and surprisingly brutal — the QT mod.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/487.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/487.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-vs-garcello",
+   "t": "FNF': vs. Garcello",
+   "d": "Chill, smoky and heartbreaking — the fan-favorite cigarette-smoking challenger.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/485.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/485.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-vs-nonsense",
+   "t": "FNF vs Nonsense",
+   "d": "The silly-but-serious mod with the self-aware style.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/644.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/644.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-indie-cross",
+   "t": "FNF': Indie Cross",
+   "d": "Cuphead, Sans, Bendy and more indie icons in one massive crossover.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/489.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod",
+    "crossover"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/489.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-sonic-legacy",
+   "t": "FNF': Sonic Legacy",
+   "d": "The Sonic universe roster with speed-metal charts.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/486.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod",
+    "sonic"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/486.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-vs-hatsune-miku",
+   "t": "FNF': Vs. Hatsune Miku",
+   "d": "The vocaloid superstar takes the mic.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/477.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod",
+    "vocaloid"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/477.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-b-sides",
+   "t": "FNF': B-Sides",
+   "d": "Every official week remixed and recharted — harder, funkier.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/475.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod",
+    "remix"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/475.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-d-sides",
+   "t": "FNF' D-Sides",
+   "d": "The alternate-universe remix of the entire game.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/636.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod",
+    "remix"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/636.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-mid-fight-masses",
+   "t": "FNF': Mid-Fight Masses",
+   "d": "Church, demons and bangers — the complete Mid-Fight Masses.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/480.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/480.png",
+   "w": 960,
+   "h": 600,
+   "b": 0
+  },
+  {
+   "id": "tt-fnf-vs-impostor-v4",
+   "t": "FNF VS Impostor v4",
+   "d": "The full Among Us musical saga — 40+ tracks of sus.",
+   "u": "https://vcsasecrly.365-24-7.de/study2/608.html",
+   "px": 0,
+   "c": "rhythm",
+   "g": [
+    "fnf",
+    "mod",
+    "among-us"
+   ],
+   "th": "https://vcsasecrly.365-24-7.de/images/covers/608.png",
    "w": 960,
    "h": 600,
    "b": 0

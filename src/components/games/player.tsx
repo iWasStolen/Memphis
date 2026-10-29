@@ -46,6 +46,25 @@ const BUILTIN: Record<string, React.ComponentType> = {
   clicker: Clicker,
 };
 
+/* jsdelivr serves .html files as text/plain (a no-web-hosting policy),
+   so they cannot be direct-embedded — the browser would show raw source.
+   The tung tung reference solves this with its loadCdnMath(): fetch the
+   HTML cross-origin (jsdelivr sends ACAO:*), inject a <base> so relative
+   assets still resolve to the CDN, and render through srcdoc. Same here. */
+const needsSrcdoc = (url: string) =>
+  /^https:\/\/cdn\.jsdelivr\.net\//i.test(url);
+
+async function buildSrcdoc(url: string): Promise<string> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const html = await res.text();
+  const base = `<base href="${url.replace(/[^/]*$/, "")}">`;
+  const doc = /<head[^>]*>/i.test(html)
+    ? html.replace(/<head[^>]*>/i, (m) => m + base)
+    : base + html;
+  return doc;
+}
+
 interface ScoreRow {
   id: string;
   name: string;
@@ -64,6 +83,7 @@ export function GamePlayer({
   /* sites that refuse iframes (px flag in the catalog) start proxied */
   const [embedMode, setEmbedMode] = useState<"direct" | "proxy">(game.proxy ? "proxy" : "direct");
   const [proxySrc, setProxySrc] = useState("");
+  const [srcdoc, setSrcdoc] = useState("");
   const [loadFailed, setLoadFailed] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [fav, setFav] = useState(false);
@@ -146,6 +166,26 @@ export function GamePlayer({
     };
   }, [embedMode, game.url]);
 
+  /* jsdelivr games: fetch + <base> inject + srcdoc render */
+  useEffect(() => {
+    if (embedMode !== "direct" || !game.url || !needsSrcdoc(game.url)) {
+      setSrcdoc("");
+      return;
+    }
+    let cancelled = false;
+    setSrcdoc("");
+    buildSrcdoc(game.url)
+      .then((doc) => {
+        if (!cancelled) setSrcdoc(doc);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [embedMode, game.url, reloadKey]);
+
   /* embed-failure heuristic: direct embeds that produce NO load event
      within 9s are treated as failed (down / blocked). Refusals that DO
      fire load stay on the manual "not working?" path — browsers give
@@ -183,6 +223,7 @@ export function GamePlayer({
   useEffect(() => {
     setEmbedMode(game.proxy ? "proxy" : "direct");
     setProxySrc("");
+    setSrcdoc("");
     setLoadFailed(false);
   }, [game.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -371,6 +412,24 @@ export function GamePlayer({
             <Loader2 className="size-6 animate-spin text-white" />
             <p className="text-xs font-mono text-[#777] boot-pulse">routing through scramjet…</p>
           </div>
+        ) : embedMode === "direct" && needsSrcdoc(game.url || "") ? (
+          srcdoc ? (
+            <iframe
+              key={embedKey}
+              srcDoc={srcdoc}
+              className="w-full h-full border-0 bg-black"
+              title={game.name}
+              allow="fullscreen; autoplay; gamepad; clipboard-write"
+              onLoad={() => {
+                iframeLoadedRef.current = true;
+              }}
+            />
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+              <Loader2 className="size-6 animate-spin text-white" />
+              <p className="text-xs font-mono text-[#777] boot-pulse">loading game files…</p>
+            </div>
+          )
         ) : (
           <iframe
             key={embedKey}
@@ -390,7 +449,12 @@ export function GamePlayer({
       {!game.builtin && !loadFailed && (
         <div className="flex items-center justify-between gap-2 px-3 h-9 border-t border-[#141414] shrink-0">
           <span className="text-[10px] text-[#555] font-mono truncate">
-            {embedMode === "proxy" ? "via Memphis proxy" : "direct embed"} · {elapsed}s
+            {embedMode === "proxy"
+              ? "via Memphis proxy"
+              : needsSrcdoc(game.url || "")
+                ? "cdn embed (srcdoc)"
+                : "direct embed"}{" "}
+            · {elapsed}s
           </span>
           <div className="flex gap-3 shrink-0">
             <button

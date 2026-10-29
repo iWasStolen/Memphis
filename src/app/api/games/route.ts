@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /* ------------------------------------------------------------
-   /api/games — catalog of 1,400+ verified playable games
+   /api/games — catalog of 1,600+ verified playable games
    Sources: data/games.json (hand-curated official sites +
    GameFlare most-played catalog, every embed verified) + the
    built-in canvas games that ship with the app.

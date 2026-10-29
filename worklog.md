@@ -253,3 +253,19 @@ Stage Summary:
   * YouTube tab: renders (logo, search, nav; signed-out landing).
   * eslint clean, tsc clean, next build passes (14 routes).
 - Untouched backend: /api/watch/* (Archive.org catalog + comments/ratings) stays available for a future native Watch UI.
+
+## Tung-tung games merge session (2026-10-30)
+
+- User request: add popular games from the tung tung reference (vcsasecrly.365-24-7.de) to our catalog.
+- Reference /play reverse-engineered from its bundle (tt-play-49f849b9d0.js): games load from 6 JSON lists at the site root — gn-math (809, study2/), seraph (468, study/), hydra (872, jsdelivr zennedu/hydra), 3kh0 (370, jsdelivr zennedu/3kh), ports (107, /k/), tglsc (83, /k/). Their FEATURED list: Coffee Talk, Animal Crossing, ADGAC, Tung Tung Horror, FNAF Sisters Location, FNAF 1-4, Drive Mad, Slope, Geometry Dash, Minecraft 1.12.2/1.8.8, Vex 1-8 + Challenges.
+- New script scripts/merge-tungtung-games.mjs: curated 106-game wants table (featured 15 + Minecraft eras + classics + 19 FNF mods), source preference jsdelivr > reference domain, STRICT verification (200 + no XFO + no CSP frame-ancestors + content-type sanity), thumb check, dedupe vs existing (find-norm + title-norm), tt- ids, idempotent rebuild.
+- BUG FOUND & FIXED (idempotency): first run added 106; second run treated them as "already have" and dropped all but 23 renamed ones, creating -2 suffixed dupes and shrinking catalog to 1,597. Root cause: dedupe set included previous tt- batch. Fix: exclude tt- entries from haveNorm/haveIds (batch is rebuilt from wants every run) + register both find-norm and title-norm.
+- BUG FOUND & FIXED (jsdelivr text/plain): jsdelivr serves .html as text/plain + nosniff → direct iframes show raw source (Drive Mad test). Same fix the reference uses (loadCdnMath): player.tsx gained a srcdoc mode for cdn.jsdelivr.net URLs — fetch (ACAO:* allows cross-origin), inject <base href> after <head>, render via srcDoc; bottom bar shows "cdn embed (srcdoc)".
+- BUG FOUND & FIXED (broken wasm uploads): 3kh0 copies of Duck Life 1, Among Us, OvO have dead .wasm files (jsdelivr 404 text served as wasm → "expected magic word … found 46 69 6c 65" = "File"). Per-want src override added: Duck Life 1 → gn-math, OvO → gn-math, Among Us → hydra (assets in separate intact repo mamayaya1/game).
+- FINAL CATALOG: 1,680 games = 62 curated + 106 tung-tung (46 jsdelivr + 60 reference-domain) + 1,500 GameFlare + 12 builtins; 533KB; 21 categories (arcade 223, action 178, racing 148, simulation 122, shooter 119, casual 118, horror 104, rhythm 86 (+19), io 80, platformer 80, sandbox 75 (+8), puzzle 73, strategy 70, sports 79, adventure 54, card 20, fighting 16, classic 14, idle 11, two-player 9, trivia 1). All 106 have thumbnails.
+- VERIFIED (agent-browser via Caddy :81, VLM screenshot analysis): 12/12 render across all sources — Minecraft 1.12.2 (Eaglercraft dialog), Geometry Dash, FNF vs Tricky, Subway Surfers (Unity loader), Drive Mad (srcdoc), Getaway Shootout, Duck Life 1, Slope 2, Stickman Hook, Idle Breakout, Among Us, OvO. API searches (minecraft=38, vex=10, fnf=21, riddle=5) and sandbox category (75) verified.
+- Copy updated 1,400+ → 1,600+: types.ts nav, footer, layout.tsx meta, home-view (5 spots), api/games comment, README (feature inventory + games row + data-sources section, three-layer catalog doc).
+- eslint 0 errors, tsc clean, next build passes (14 routes).
+
+Stage Summary:
+- Catalog scaled 1,574 → 1,680 with the reference's most popular games (Vex series completed, 7 Minecraft eras, 19 FNF mods, Duck Life/Riddle School/Fireboy/Bad Ice Cream/Bloons TD/World's Hardest series); pipeline is a third re-runnable script (merge-tungtung-games) with per-game source overrides; player gained srcdoc rendering for jsdelivr-hosted games.

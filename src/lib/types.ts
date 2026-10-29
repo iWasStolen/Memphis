@@ -14,7 +14,7 @@ export type ViewId =
 
 export const VIEWS: { id: ViewId; label: string; desc: string }[] = [
   { id: "home", label: "Home", desc: "Dashboard" },
-  { id: "play", label: "Play", desc: "1,400+ popular games" },
+  { id: "play", label: "Play", desc: "1,600+ popular games" },
   { id: "apps", label: "Apps", desc: "50 web apps" },
   { id: "chat", label: "Chat", desc: "Community" },
   { id: "ai", label: "AI", desc: "GLM chat — free, unlimited" },
