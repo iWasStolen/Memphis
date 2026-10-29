@@ -1,0 +1,457 @@
+     1→/**
+     2→ * Memphis unBLACKed — merge popular games from the tung tung reference
+     3→ * (vcsasecrly.365-24-7.de) into data/games.json.
+     4→ *
+     5→ * The reference's /play section loads 7 JSON lists:
+     6→ *   mc4d5af1 = gn-math (809)   — self-hosted "study2/" on the reference domain
+     7→ *   m882f408 = seraph  (468)   — self-hosted "study/"  on the reference domain
+     8→ *   m8f04680 = hydra   (872)   — PUBLIC jsdelivr CDN (github.com/zennedu/hydra)
+     9→ *   mf113660 = 3kh0    (370)   — PUBLIC jsdelivr CDN (github.com/zennedu/3kh)
+    10→ *   m630d80d = ports   (107)   — self-hosted "/k/"    on the reference domain
+    11→ *   m4d6f852 = (empty)
+    12→ *   m576e992 = tglsc   (83)    — self-hosted "/k/"    on the reference domain
+    13→ *
+    14→ * This script adds a hand-picked popular subset (their FEATURED list +
+    15→ * the classic unblocked-games canon + iconic FNF mods), preferring the
+    16→ * public jsdelivr CDN when a title exists in both. Every game is
+    17→ * build-time verified exactly like the GameFlare batch:
+    18→ *   - HTTP 200 on the embed URL
+    19→ *   - no X-Frame-Options deny/sameorigin
+    20→ *   - no CSP frame-ancestors restricting embedding
+    21→ *   - thumbnail checked; empty string if it 404s
+    22→ *
+    23→ * Entries get "tt-" ids and are inserted after the curated block.
+    24→ * Idempotent: re-running rebuilds the tt- batch from the wants list.
+    25→ *
+    26→ * Run: node scripts/merge-tungtung-games.mjs
+    27→ */
+    28→import { readFile, writeFile } from "node:fs/promises";
+    29→import path from "node:path";
+    30→
+    31→const REF = "https://vcsasecrly.365-24-7.de";
+    32→const UA =
+    33→  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+    34→
+    35→/* jsdelivr-backed lists first (public CDN > private reference domain) */
+    36→const LISTS = [
+    37→  { key: "mf113660", name: "3kh0", jsdelivr: true },
+    38→  { key: "m8f04680", name: "hydra", jsdelivr: true },
+    39→  { key: "mc4d5af1", name: "gn-math", jsdelivr: false },
+    40→  { key: "m882f408", name: "seraph", jsdelivr: false },
+    41→  { key: "m630d80d", name: "ports", jsdelivr: false },
+    42→  { key: "m576e992", name: "tglsc", jsdelivr: false },
+    43→];
+    44→
+    45→const norm = (s) =>
+    46→  (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    47→
+    48→const slugify = (s) =>
+    49→  (s || "")
+    50→    .toLowerCase()
+    51→    .replace(/['’.]/g, "")
+    52→    .replace(/[^a-z0-9]+/g, "-")
+    53→    .replace(/^-+|-+$/g, "");
+    54→
+    55→/* ---------------------------------------------------------------
+    56→   Curated wants.  find  = exact normalized name in a reference list
+    57→   title = display name     cat = our taxonomy slug
+    58→   --------------------------------------------------------------- */
+    59→const WANTS = [
+    60→  /* --- their FEATURED list --- */
+    61→  { find: "Coffee Talk", title: "Coffee Talk", cat: "simulation", tags: ["cozy", "coffee"],
+    62→    d: "Brew drinks for Seattle's fantasy regulars — vampires, elves and mermaids included — in this cozy late-night coffee shop sim." },
+    63→  { find: "Animal Crossing: Population Growing!", title: "Animal Crossing: Population Growing!", cat: "simulation", tags: ["animal-crossing", "life-sim"],
+    64→    d: "The GameCube original. Settle into a village of talking animals — fish, dig, decorate and pay off your mortgage to Tom Nook." },
+    65→  { find: "A Difficult Game About Climbing", title: "A Difficult Game About Climbing", cat: "arcade", tags: ["rage", "physics"],
+    66→    d: "One man, one hammer, one slippery mountain. A rage-inducing physics climb — one mistake and you slide all the way back down." },
+    67→  { find: "Tung Tung Horror", title: "Tung Tung Horror", cat: "horror", tags: ["tung-tung-sahur", "meme"],
+    68→    d: "Tung Tung Sahur turns horror. Survive the night while the drum-wielding figure hunts you through the dark." },
+    69→  { find: "FNAF Sisters Location", title: "FNAF: Sisters Location", cat: "horror", tags: ["fnaf", "animatronics"],
+    70→    d: "Run the night shift at Circus Baby's underground party facility. Watch the animatronics, mind the vents, survive until morning." },
+    71→  { find: "Drive Mad", title: "Drive Mad", cat: "racing", tags: ["physics", "obstacle"],
+    72→    d: "Keep the jeep upright over wobbly obstacle courses. Simple controls, maddening physics — drive fast, land clean." },
+    73→  { find: "Geometry Dash", title: "Geometry Dash", cat: "platformer", tags: ["geometry-dash", "rhythm"],
+    74→    d: "Jump and fly through rhythm-based obstacle gauntlets. One-touch controls, brutal difficulty, iconic soundtrack." },
+    75→  { find: "Geometry Dash Lite", title: "Geometry Dash Lite", cat: "platformer", tags: ["geometry-dash", "rhythm"],
+    76→    d: "The free chapter of Geometry Dash — same rhythm, same rage, zero cost." },
+    77→  { find: "Minecraft 1.12.2", title: "Minecraft 1.12.2", cat: "sandbox", tags: ["minecraft", "eaglercraft"],
+    78→    d: "Full Minecraft in the browser — the classic 1.12.2 world update. Build, mine, craft and survive." },
+    79→  { find: "Minecraft 1.8.8", title: "Minecraft 1.8.8", cat: "sandbox", tags: ["minecraft", "eaglercraft", "pvp"],
+    80→    d: "The legendary 1.8.8 era of Minecraft — the version PvP players never let go of." },
+    81→  { find: "Vex 1", title: "Vex 1", cat: "platformer", tags: ["vex", "stickman", "parkour"],
+    82→    d: "Where it all started. Guide the stickman through acts of spikes, saws and traps." },
+    83→  { find: "Vex 3", title: "Vex 3", cat: "platformer", tags: ["vex", "stickman", "parkour"],
+    84→    d: "More acts, more traps, more wall-jumps — the fan-favorite Vex." },
+    85→  { find: "Vex 3 XMAS", title: "Vex 3 XMAS", cat: "platformer", tags: ["vex", "stickman", "christmas"],
+    86→    d: "Vex 3 in a winter coat — same brutal parkour, festive decoration." },
+    87→  { find: "Vex 6", title: "Vex 6", cat: "platformer", tags: ["vex", "stickman", "parkour"],
+    88→    d: "The trickiest acts yet — swing on poles, ride platforms, dodge the newer traps." },
+    89→  { find: "Vex 8", title: "Vex 8", cat: "platformer", tags: ["vex", "stickman", "parkour"],
+    90→    d: "The newest mainline Vex — the stickman parkour formula at its most polished." },
+    91→  { find: "Vex Challenges", title: "Vex Challenges", cat: "platformer", tags: ["vex", "challenge"],
+    92→    d: "Vex goes level-based: short, sharp challenge runs against the clock." },
+    93→
+    94→  /* --- more Minecraft eras --- */
+    95→  { find: "Minecraft 1.21.4", title: "Minecraft 1.21.4", cat: "sandbox", tags: ["minecraft", "eaglercraft"],
+    96→    d: "The newest world update playable in the browser — trial chambers, the breeze and all." },
+    97→  { find: "Minecraft 1.5.2", title: "Minecraft 1.5.2", cat: "sandbox", tags: ["minecraft", "eaglercraft"],
+    98→    d: "The classic 1.5 Redstone Update era of Minecraft, in your browser." },
+    99→  { find: "Minecraft Beta 1.7.3", title: "Minecraft Beta 1.7.3", cat: "sandbox", tags: ["minecraft", "beta", "nostalgia"],
+   100→    d: "Old-school Beta — the version nostalgia servers keep alive. No hunger, no sprinting, pure blocks." },
+   101→  { find: "Minecraft Alpha 1.2.6", title: "Minecraft Alpha 1.2.6", cat: "sandbox", tags: ["minecraft", "alpha", "nostalgia"],
+   102→    d: "Back to Alpha: no beds, no banners, just you and an infinite blocky world." },
+   103→  { find: "Minecraft Pocket Edition", title: "Minecraft Pocket Edition", cat: "sandbox", tags: ["minecraft", "pocket"],
+   104→    d: "The mobile edition's early build — the whole pocket Minecraft experience in your browser." },
+   105→  { find: "Animal Crossing: Wild World", title: "Animal Crossing: Wild World", cat: "simulation", tags: ["animal-crossing", "life-sim"],
+   106→    d: "The DS favorite in the browser — same cozy village life, touch-era charm." },
+   107→
+   108→  /* --- popular classics we're missing --- */
+   109→  { find: "BitLife", title: "BitLife", cat: "simulation", tags: ["life-sim", "text"],
+   110→    d: "Live a whole life from crib to grave — school, jobs, crime, marriage. Every choice writes your obituary." },
+   111→  { find: "Among Us", title: "Among Us", cat: "strategy", tags: ["social-deduction", "space"], src: "hydra",
+   112→    d: "The social deduction hit. Fix the ship, find the impostor — or lie your way to victory." },
+   113→  { find: "Slope 2", title: "Slope 2", cat: "racing", tags: ["slope", "endless", "3d"],
+   114→    d: "The endless neon ball-roller returns — faster, steeper, glitchier. Chase high scores down the shifting hill." },
+   115→  { find: "Subway Surfers", title: "Subway Surfers", cat: "arcade", tags: ["endless-runner", "dodge"],
+   116→    d: "Dash down the tracks, dodge the trains and outrun the inspector. The endless-runner juggernaut." },
+   117→  { find: "Getaway Shootout", title: "Getaway Shootout", cat: "two-player", tags: ["ragdoll", "shooting", "race"],
+   118→    d: "Two racers, one getaway. Gun, jump and grapple past your friend to the extraction point first." },
+   119→  { find: "Soccer Random", title: "Soccer Random", cat: "sports", tags: ["random-series", "two-player", "ragdoll"],
+   120→    d: "Ragdoll two-button soccer. Timing is everything — and so is luck." },
+   121→  { find: "Stickman Hook", title: "Stickman Hook", cat: "arcade", tags: ["swing", "momentum"],
+   122→    d: "Swing through hundreds of short levels Spider-Man style. Tap to attach, release to fly." },
+   123→  { find: "Tiny Fishing", title: "Tiny Fishing", cat: "casual", tags: ["fishing", "upgrade"],
+   124→    d: "The addictive cast-and-upgrade fisher. Angle for deeper, rarer, weirder fish every run." },
+   125→  { find: "Time Shooter 2", title: "Time Shooter 2", cat: "shooter", tags: ["superhot-like", "slow-motion"],
+   126→    d: "Time moves only when you do. Dodge bullets in slow motion and plan every single shot." },
+   127→  { find: "OvO", title: "OvO", cat: "platformer", tags: ["momentum", "speedrun"], src: "gn-math",
+   128→    d: "Momentum platforming with slides, wall-runs and coyote jumps. Built for speedruns." },
+   129→  { find: "Bowmasters", title: "Bowmasters", cat: "action", tags: ["aim", "ragdoll", "duel"],
+   130→    d: "Aim, angle, annihilate. Ragdoll archery duels with dozens of unlockable characters." },
+   131→  { find: "Doodle Jump", title: "Doodle Jump", cat: "arcade", tags: ["endless", "vertical"],
+   132→    d: "Bounce up an endless hand-drawn tower. Mind the black holes and broken platforms." },
+   133→  { find: "Idle Breakout", title: "Idle Breakout", cat: "idle", tags: ["breakout", "upgrade"],
+   134→    d: "The idle-game take on Breakout — buy balls, upgrade damage, break bricks while you sleep." },
+   135→  { find: "Clicker Heroes", title: "Clicker Heroes", cat: "idle", tags: ["clicker", "rpg"],
+   136→    d: "Click monsters, hire heroes, automate everything. The comfy clicker that fueled a genre." },
+   137→  { find: "Learn to Fly", title: "Learn to Fly", cat: "arcade", tags: ["launcher", "penguin"],
+   138→    d: "The original: a penguin, a ramp and stubborn physics. Glide farther with every run." },
+   139→  { find: "Learn to Fly Idle", title: "Learn to Fly Idle", cat: "idle", tags: ["clicker", "snowball"],
+   140→    d: "The Learn to Fly spin on idles — click, upgrade and snowball your way to orbit." },
+   141→  { find: "Retro Bowl College", title: "Retro Bowl College", cat: "sports", tags: ["retro-bowl", "football", "management"],
+   142→    d: "Retro Bowl on campus — recruit, redshirt and coach your college roster to the championship." },
+   143→  { find: "Two Ball 3D", title: "Two Ball 3D", cat: "racing", tags: ["endless", "two-player"],
+   144→    d: "Endless 3D runner for one or two players — same track, first to fall loses." },
+   145→  { find: "Only Up", title: "Only Up", cat: "platformer", tags: ["vertical", "climb", "no-save"],
+   146→    d: "A vertical climb through a sky of floating junk. No saves — one fall is a very long fall." },
+   147→  { find: "Suika", title: "Suika", cat: "puzzle", tags: ["merge", "fruit", "physics"],
+   148→    d: "The watermelon game: drop and merge fruit, aim for the big melon, never overflow the jar." },
+   149→  { find: "Paper.io 3D", title: "Paper.io 3D", cat: "io", tags: ["territory", "3d"],
+   150→    d: "Claim territory on a spinning 3D globe. Cut off rivals before they cut you off." },
+   151→  { find: "Superfighters", title: "Superfighters", cat: "fighting", tags: ["stickman", "guns", "chaos"],
+   152→    d: "Chunky 2D brawls with guns, grenades and brutal physics. Couch-warfare chaos for two." },
+   153→  { find: "Tank Trouble 2", title: "Tank Trouble 2", cat: "two-player", tags: ["tanks", "maze", "bullets"],
+   154→    d: "Maze-tank duels where your own bullets bounce right back at you. Classic classroom warfare." },
+   155→  { find: "Territory War", title: "Territory War", cat: "strategy", tags: ["turn-based", "stickman"],
+   156→    d: "Turn-based stickman squad combat — grenades, rifles and carefully placed jumps." },
+   157→  { find: "Swords and Sandals", title: "Swords and Sandals", cat: "fighting", tags: ["gladiator", "rpg"],
+   158→    d: "Build a gladiator and fight your way up the arena ladder. The classic flash RPG-fighter." },
+   159→  { find: "Thing-Thing Arena 3", title: "Thing-Thing Arena 3", cat: "shooter", tags: ["arena", "flash"],
+   160→    d: "Fast top-down arena killing fields. Weapons everywhere, cover nowhere." },
+   161→  { find: "Zombotron 2", title: "Zombotron 2", cat: "shooter", tags: ["zombies", "flash", "planet"],
+   162→    d: "Shoot and loot your way across a zombie-infested mining planet. Flash-era action gold." },
+   163→  { find: "Gun Mayhem 2", title: "Gun Mayhem 2", cat: "two-player", tags: ["platform-shooter", "party"],
+   164→    d: "Knock your friends off the platform in chaotic gun-battles — dozens of weapons, modes and maps." },
+   165→  { find: "Earn Tod Ie 2", title: "Earn to Die 2", cat: "racing", tags: ["zombies", "upgrade", "car"],
+   166→    d: "Plow through zombie hordes with an armored car, earn cash, upgrade the wreck, repeat." },
+   167→  { find: "Burrito Bison: Launcha Libre", title: "Burrito Bison: Launcha Libre", cat: "arcade", tags: ["launcher", "upgrade"],
+   168→    d: "Launch the luchador, squash gummy bears, buy absurd upgrades. The beloved launcher classic." },
+   169→  { find: "Boxhead 2 Playrooms", title: "Boxhead: 2Play Rooms", cat: "shooter", tags: ["zombies", "co-op", "flash"],
+   170→    d: "Endless zombie waves, one boxhead, upgradeable guns. The co-op flash classic." },
+   171→  { find: "Crazy Cattle 3D", title: "Crazy Cattle 3D", cat: "io", tags: ["battle-royale", "cows", "viral"],
+   172→    d: "The viral battle royale where everyone rides battle cattle. Bump every cow off the island." },
+   173→  { find: "Raft", title: "Raft", cat: "simulation", tags: ["survival", "ocean"],
+   174→    d: "Stranded on a tiny raft on an endless ocean — fish, collect, expand, survive." },
+   175→  { find: "Tron", title: "Tron", cat: "classic", tags: ["light-cycles", "arcade"],
+   176→    d: "Light-cycle duel: draw walls of light, trap your rival, never crash first. The arcade legend." },
+   177→  { find: "Dreadhead Parkour", title: "Dreadhead Parkour", cat: "platformer", tags: ["parkour", "rooftops"],
+   178→    d: "Flip, slide and wall-run through rooftop courses as a parkour master." },
+   179→  { find: "Noob Steve Parkour", title: "Noob Steve Parkour", cat: "platformer", tags: ["minecraft-style", "jumps"],
+   180→    d: "Minecraft-styled block parkour — jump from cube to cube, no checkpoints, no mercy." },
+   181→  { find: "Block Craft Parkour", title: "Block Craft Parkour", cat: "platformer", tags: ["blocky", "jumps"],
+   182→    d: "More blocky parkour runs — time your jumps across floating voxel platforms." },
+   183→  { find: "Rainbow Obby", title: "Rainbow Obby", cat: "platformer", tags: ["obby", "roblox-style", "tower"],
+   184→    d: "The Roblox-style rainbow tower obby. Climb past colorful traps all the way to the top." },
+   185→  { find: "Bob the Robber", title: "Bob the Robber", cat: "puzzle", tags: ["stealth", "heist"],
+   186→    d: "Sneak through houses, dodge cameras and steal back the goods. The stealth-puzzle classic." },
+   187→  { find: "Bob The Robber 2", title: "Bob the Robber 2", cat: "puzzle", tags: ["stealth", "heist"],
+   188→    d: "Bob's back — more guards, more gadgets, more elaborate heists." },
+   189→  { find: "Bad Ice Cream 2", title: "Bad Ice Cream 2", cat: "arcade", tags: ["maze", "ice", "co-op"],
+   190→    d: "Slick your way through more frosty mazes — tougher monsters, new ice tricks." },
+   191→  { find: "Bad Ice Cream 3", title: "Bad Ice Cream 3", cat: "arcade", tags: ["maze", "ice", "co-op"],
+   192→    d: "The freeze-'em-all finale: 36 levels and a pile of new mechanics." },
+   193→  { find: "Bloons TD", title: "Bloons TD 1", cat: "strategy", tags: ["tower-defense", "monkeys", "balloons"],
+   194→    d: "The tower defense that started it all — dart monkeys versus endless balloons." },
+   195→  { find: "Bloons TD 2", title: "Bloons TD 2", cat: "strategy", tags: ["tower-defense", "monkeys", "balloons"],
+   196→    d: "More towers, more bloon types, more popping. The monkey army grows." },
+   197→  { find: "World's Hardest Game 2", title: "World's Hardest Game 2", cat: "arcade", tags: ["rage", "reflex"],
+   198→    d: "It's back and it's somehow harder. Move the square, dodge the dots, question your choices." },
+   199→  { find: "The World's Hardest Game 3", title: "World's Hardest Game 3", cat: "arcade", tags: ["rage", "reflex"],
+   200→    d: "Third round of the infamous reflex torture test." },
+   201→  { find: "The World's Hardest Game 4", title: "World's Hardest Game 4", cat: "arcade", tags: ["rage", "reflex"],
+   202→    d: "Four times the levels, four times the pain. You asked for this." },
+   203→  { find: "Duck Life", title: "Duck Life 1", cat: "casual", tags: ["duck-life", "training", "racing"], src: "gn-math",
+   204→    d: "Train your duckling — running, flying, swimming — then race for the championship crown." },
+   205→  { find: "Duck Life 2", title: "Duck Life 2", cat: "casual", tags: ["duck-life", "training", "racing"],
+   206→    d: "A bigger training grind and the world championship of duck racing." },
+   207→  { find: "Duck Life 3", title: "Duck Life 3", cat: "casual", tags: ["duck-life", "evolution"],
+   208→    d: "Evolve your duck's specialist class and race the world all over again." },
+   209→  { find: "Duck Life Battle", title: "Duck Life Battle", cat: "casual", tags: ["duck-life", "rpg", "battles"],
+   210→    d: "The Duck Life spin on RPG battles — train stats and win turn-by-turn fights." },
+   211→  { find: "Riddle School", title: "Riddle School", cat: "puzzle", tags: ["escape", "point-and-click"],
+   212→    d: "Help Phil escape the world's most escapable school. The point-and-click classic." },
+   213→  { find: "Riddle School 2", title: "Riddle School 2", cat: "puzzle", tags: ["escape", "point-and-click"],
+   214→    d: "Phil's out… and immediately stuck again. New school, new riddles." },
+   215→  { find: "Riddle School 3", title: "Riddle School 3", cat: "puzzle", tags: ["escape", "point-and-click"],
+   216→    d: "The biggest, funniest escape of the series." },
+   217→  { find: "Riddle School 4", title: "Riddle School 4", cat: "puzzle", tags: ["escape", "point-and-click"],
+   218→    d: "Short, weird and legendary. No spoilers." },
+   219→  { find: "Riddle School 5", title: "Riddle School 5", cat: "puzzle", tags: ["escape", "point-and-click"],
+   220→    d: "The alien-finale of the Riddle School saga." },
+   221→  { find: "Fireboy and Watergirl 3", title: "Fireboy and Watergirl 3", cat: "puzzle", tags: ["co-op", "elemental"],
+   222→    d: "The elemental duo hits the Ice Temple — light and shadow puzzles built for two." },
+   223→  { find: "Fireboy and Watergirl 4", title: "Fireboy and Watergirl 4", cat: "puzzle", tags: ["co-op", "portals"],
+   224→    d: "Crystal Temple portal puzzles — solo or with a friend at one keyboard." },
+   225→  { find: "Fancy Pants Adventure 2", title: "Fancy Pants Adventure 2", cat: "platformer", tags: ["fancy-pants", "flow"],
+   226→    d: "The stickman with the fancy pants returns — flowy slopes, squiggles and spiders." },
+   227→  { find: "Fancy Pants Adventure 3", title: "Fancy Pants Adventure 3", cat: "platformer", tags: ["fancy-pants", "flow"],
+   228→    d: "The biggest Fancy Pants world yet — golf clubs, pirates and piratical pants." },
+   229→  { find: "Moto X3M 2", title: "Moto X3M 2", cat: "racing", tags: ["moto-x3m", "stunts", "checkpoints"],
+   230→    d: "More flipping, more spikes, more checkpoints. The sequel cranks everything up." },
+   231→  { find: "Moto X3M 3", title: "Moto X3M 3", cat: "racing", tags: ["moto-x3m", "stunts"],
+   232→    d: "New stunts, new saws, same glorious flipping death." },
+   233→  { find: "Moto X3M Spooky", title: "Moto X3M Spooky", cat: "racing", tags: ["moto-x3m", "halloween"],
+   234→    d: "The Halloween level pack — pumpkins, skeletons and headless stunts." },
+   235→  { find: "Madalin Stunt Cars 2", title: "Madalin Stunt Cars 2", cat: "racing", tags: ["stunts", "supercars", "sandbox"],
+   236→    d: "The sandbox stunt-driving favorite — drift, flip and crash supercars around empty lots." },
+   237→  { find: "Bubbles Hooter", title: "Bubble Shooter", cat: "puzzle", tags: ["match-3", "classic"],
+   238→    d: "Aim, shoot, pop. The endless color-matching classic — clear the board before it sinks." },
+   239→
+   240→  /* --- iconic FNF mods --- */
+   241→  { find: "Friday Night Funkin': vs. Tricky", title: "FNF': vs. Tricky", cat: "rhythm", tags: ["fnf", "mod", "horror"],
+   242→    d: "The Clown Violent horror himself steps into the rap ring. Chaotic charts, iconic mod." },
+   243→  { find: "Friday Night Funkin': V.S. Whitty", title: "FNF': V.S. Whitty", cat: "rhythm", tags: ["fnf", "mod"],
+   244→    d: "The hot-headed bomb mod that lit up the FNF scene." },
+   245→  { find: "Friday Night Funkin': vs. Garcello", title: "FNF': vs. Garcello", cat: "rhythm", tags: ["fnf", "mod"],
+   246→    d: "Chill, smoky and heartbreaking — the fan-favorite cigarette-smoking challenger." },
+   247→  { find: "Friday Night Funkin': Vs. Hex", title: "FNF': Vs. Hex", cat: "rhythm", tags: ["fnf", "mod"],
+   248→    d: "The wholesome robot basketballer with smooth original tracks." },
+   249→  { find: "Friday Night Funkin vs Tabi", title: "FNF vs Tabi", cat: "rhythm", tags: ["fnf", "mod"],
+   250→    d: "The vengeful ex-producer — a mod famous for its aggressive final track." },
+   251→  { find: "Friday Night Funkin VS. Sky", title: "FNF VS. Sky", cat: "rhythm", tags: ["fnf", "mod"],
+   252→    d: "The pastel stalker-girlfriend mod with cult-favorite songs." },
+   253→  { find: "Friday Night Funkin vs Zardy", title: "FNF vs Zardy", cat: "rhythm", tags: ["fnf", "mod", "horror"],
+   254→    d: "The scarecrow of Zardy's Farm haunts the charts." },
+   255→  { find: "Friday Night Funkin vs Shaggy", title: "FNF vs Shaggy", cat: "rhythm", tags: ["fnf", "mod", "meme"],
+   256→    d: "Scooby's snack master goes ultra instinct. Meme charts, zero mercy." },
+   257→  { find: "Friday Night Funkin VS. KAPI", title: "FNF VS. KAPI", cat: "rhythm", tags: ["fnf", "mod"],
+   258→    d: "The arcade cat behind the keyboard — tight, sync-heavy charts." },
+   259→  { find: "Friday Night Funkin': vs. QT", title: "FNF': vs. QT", cat: "rhythm", tags: ["fnf", "mod"],
+   260→    d: "Sweet, pastel and surprisingly brutal — the QT mod." },
+   261→  { find: "Friday Night Funkin vs Nonsense", title: "FNF vs Nonsense", cat: "rhythm", tags: ["fnf", "mod"],
+   262→    d: "The silly-but-serious mod with the self-aware style." },
+   263→  { find: "Friday Night Funkin': Indie Cross", title: "FNF': Indie Cross", cat: "rhythm", tags: ["fnf", "mod", "crossover"],
+   264→    d: "Cuphead, Sans, Bendy and more indie icons in one massive crossover." },
+   265→  { find: "Friday Night Funkin': Mario's Madness", title: "FNF': Mario's Madness", cat: "rhythm", tags: ["fnf", "mod", "creepypasta"],
+   266→    d: "The creepypasta Mario universe — horror charts with legendary songs." },
+   267→  { find: "Friday Night Funkin': Sonic Legacy", title: "FNF': Sonic Legacy", cat: "rhythm", tags: ["fnf", "mod", "sonic"],
+   268→    d: "The Sonic universe roster with speed-metal charts." },
+   269→  { find: "Friday Night Funkin': B-Sides", title: "FNF': B-Sides", cat: "rhythm", tags: ["fnf", "mod", "remix"],
+   270→    d: "Every official week remixed and recharted — harder, funkier." },
+   271→  { find: "Friday Night Funkin' D-Sides", title: "FNF' D-Sides", cat: "rhythm", tags: ["fnf", "mod", "remix"],
+   272→    d: "The alternate-universe remix of the entire game." },
+   273→  { find: "Friday Night Funkin VS Impostor v4", title: "FNF VS Impostor v4", cat: "rhythm", tags: ["fnf", "mod", "among-us"],
+   274→    d: "The full Among Us musical saga — 40+ tracks of sus." },
+   275→  { find: "Friday Night Funkin': Sarvente's Mid-Fight Masses", title: "FNF': Mid-Fight Masses", cat: "rhythm", tags: ["fnf", "mod"],
+   276→    d: "Church, demons and bangers — the complete Mid-Fight Masses." },
+   277→  { find: "Friday Night Funkin': Vs. Hatsune Miku", title: "FNF': Vs. Hatsune Miku", cat: "rhythm", tags: ["fnf", "mod", "vocaloid"],
+   278→    d: "The vocaloid superstar takes the mic." },
+   279→];
+   280→
+   281→/* --------------------------------------------------------------- */
+   282→
+   283→async function fetchJson(url) {
+   284→  const res = await fetch(url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(20000) });
+   285→  if (!res.ok) throw new Error(`${res.status} ${url}`);
+   286→  return res.json();
+   287→}
+   288→
+   289→/** STRICT embed verification — same rules as build-games-catalog.
+   290→ *  Content-type is recorded: jsdelivr serves .html as text/plain, which
+   291→ *  the player handles via its srcdoc mode (fetch + <base> inject), so
+   292→ *  text/plain is NOT a failure — but anything that's neither html nor
+   293→ *  plain text (e.g. binaries) is rejected. */
+   294→async function verifyEmbed(url) {
+   295→  try {
+   296→    const res = await fetch(url, {
+   297→      headers: { "User-Agent": UA },
+   298→      redirect: "follow",
+   299→      signal: AbortSignal.timeout(20000),
+   300→    });
+   301→    if (res.status !== 200) return `HTTP ${res.status}`;
+   302→    const xfo = (res.headers.get("x-frame-options") || "").toLowerCase();
+   303→    if (xfo.includes("deny") || xfo.includes("sameorigin")) return `XFO ${xfo}`;
+   304→    const csp = (res.headers.get("content-security-policy") || "").toLowerCase();
+   305→    const fa = csp.match(/frame-ancestors([^;]*)/);
+   306→    if (fa && !fa[1].includes("*")) return `CSP frame-ancestors${fa[1]}`;
+   307→    const ct = (res.headers.get("content-type") || "").toLowerCase();
+   308→    if (!ct.includes("text/html") && !ct.includes("text/plain"))
+   309→      return `content-type ${ct}`;
+   310→    return null; // ok
+   311→  } catch (e) {
+   312→    return e.name === "TimeoutError" ? "timeout" : String(e).slice(0, 60);
+   313→  }
+   314→}
+   315→
+   316→async function checkThumb(url) {
+   317→  if (!url) return "";
+   318→  try {
+   319→    const res = await fetch(url, {
+   320→      method: "HEAD",
+   321→      headers: { "User-Agent": UA },
+   322→      signal: AbortSignal.timeout(12000),
+   323→    });
+   324→    return res.ok ? url : "";
+   325→  } catch {
+   326→    return "";
+   327→  }
+   328→}
+   329→
+   330→/* --- load reference lists --- */
+   331→console.log("Fetching reference game lists…");
+   332→const lists = [];
+   333→for (const l of LISTS) {
+   334→  const data = await fetchJson(`${REF}/${l.key}.json`);
+   335→  lists.push({ ...l, games: Array.isArray(data) ? data : [] });
+   336→  console.log(`  ${l.name.padEnd(7)} ${String(data.length).padStart(4)} games`);
+   337→}
+   338→
+   339→/* index by normalized name (first entry per name per list) */
+   340→const index = new Map(); // norm → [{list, game}]
+   341→for (const l of lists) {
+   342→  for (const g of l.games) {
+   343→    const n = norm(g.name);
+   344→    if (!n) continue;
+   345→    if (!index.has(n)) index.set(n, []);
+   346→    const bucket = index.get(n);
+   347→    if (!bucket.some((b) => b.list.name === l.name)) bucket.push({ list: l, game: g });
+   348→  }
+   349→}
+   350→
+   351→/* --- load existing catalog --- */
+   352→const dataDir = path.join(process.cwd(), "data");
+   353→const existing = JSON.parse(await readFile(path.join(dataDir, "games.json"), "utf8"));
+   354→/* idempotency: the tt- batch is fully rebuilt on every run, so previous
+   355→   tt- entries must NOT count as "already have" (that would drop them) */
+   356→const preexisting = existing.games.filter((g) => !g.id.startsWith("tt-"));
+   357→const haveNorm = new Set(preexisting.map((g) => norm(g.t)));
+   358→const haveIds = new Set(preexisting.map((g) => g.id));
+   359→const CAT_LABELS = Object.fromEntries(existing.categories.map((c) => [c.slug, c.label]));
+   360→
+   361→/* --- resolve wants --- */
+   362→const added = [];
+   363→const skipped = [];
+   364→const notFound = [];
+   365→const failed = [];
+   366→
+   367→const queue = [...WANTS];
+   368→const CONCURRENCY = 12;
+   369→async function worker() {
+   370→  while (queue.length) {
+   371→    const w = queue.shift();
+   372→    const n = norm(w.find);
+   373→    const tn = norm(w.title);
+   374→    if (haveNorm.has(n) || haveNorm.has(tn)) {
+   375→      skipped.push(`${w.title} — already in catalog`);
+   376→      continue;
+   377→    }
+   378→    const hits = index.get(n);
+   379→    if (!hits || !hits.length) {
+   380→      notFound.push(w.find);
+   381→      continue;
+   382→    }
+   383→    /* prefer jsdelivr-backed lists, then gn-math → seraph → ports → tglsc;
+   384→       w.src overrides for games whose jsdelivr upload is broken */
+   385→    const hit = w.src
+   386→      ? hits.find((h) => h.list.name === w.src) || hits[0]
+   387→      : hits[0];
+   388→    const url = hit.game.url.startsWith("http")
+   389→      ? hit.game.url
+   390→      : new URL(hit.game.url, `${REF}/`).href;
+   391→    const thumb = hit.game.image && hit.game.image.startsWith("http")
+   392→      ? hit.game.image
+   393→      : hit.game.image
+   394→        ? new URL(hit.game.image, `${REF}/`).href
+   395→        : "";
+   396→
+   397→    const err = await verifyEmbed(url);
+   398→    if (err) {
+   399→      failed.push(`${w.title} [${hit.list.name}] — ${err}`);
+   400→      continue;
+   401→    }
+   402→    const th = await checkThumb(thumb);
+   403→    let id = `tt-${slugify(w.title)}`;
+   404→    let k = 2;
+   405→    while (haveIds.has(id)) id = `tt-${slugify(w.title)}-${k++}`;
+   406→    haveIds.add(id);
+   407→    haveNorm.add(n);
+   408→    haveNorm.add(tn);
+   409→    added.push({
+   410→      id,
+   411→      t: w.title,
+   412→      d: w.d,
+   413→      u: url,
+   414→      px: 0,
+   415→      c: w.cat,
+   416→      g: w.tags,
+   417→      th,
+   418→      w: 960,
+   419→      h: 600,
+   420→      b: 0,
+   421→    });
+   422→    console.log(`  ✓ ${w.title}  [${hit.list.name}${hit.list.jsdelivr ? " · jsdelivr" : ""}]`);
+   423→  }
+   424→}
+   425→await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+   426→
+   427→/* --- assemble: curated → tt (this batch, in wants order) → gf → builtins --- */
+   428→const curated = existing.games.filter((g) => !g.b && !g.id.startsWith("gf-") && !g.id.startsWith("tt-"));
+   429→const gf = existing.games.filter((g) => g.id.startsWith("gf-"));
+   430→const builtins = existing.games.filter((g) => g.b);
+   431→const games = [...curated, ...added, ...gf, ...builtins];
+   432→
+   433→const counts = new Map();
+   434→for (const g of games) counts.set(g.c, (counts.get(g.c) || 0) + 1);
+   435→const categories = [...counts.entries()]
+   436→  .map(([slug, count]) => ({ slug, label: CAT_LABELS[slug] || slug, count }))
+   437→  .sort((a, b) => b.count - a.count);
+   438→
+   439→const catalog = {
+   440→  generatedAt: new Date().toISOString(),
+   441→  source:
+   442→    "hand-curated popular games + tung tung reference picks (verified embeddable) + GameFlare most-played catalog (verified embeddable) + built-in",
+   443→  total: games.length,
+   444→  categories,
+   445→  games,
+   446→};
+   447→
+   448→const out = path.join(dataDir, "games.json");
+   449→await writeFile(out, JSON.stringify(catalog, null, 1));
+   450→
+   451→console.log(`\nWrote ${games.length} games (${curated.length} curated + ${added.length} tung-tung + ${gf.length} GameFlare + ${builtins.length} built-in) → ${out}`);
+   452→console.log(`size: ${(JSON.stringify(catalog).length / 1024).toFixed(0)} KB`);
+   453→console.log(`categories: ${categories.map((c) => `${c.slug}=${c.count}`).join(" ")}`);
+   454→if (skipped.length) console.log(`\nskipped (already have):\n  ${skipped.join("\n  ")}`);
+   455→if (notFound.length) console.log(`\nNOT FOUND in reference lists:\n  ${notFound.join("\n  ")}`);
+   456→if (failed.length) console.log(`\nFAILED verification:\n  ${failed.join("\n  ")}`);
+   457→

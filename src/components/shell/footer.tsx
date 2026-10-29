@@ -9,7 +9,7 @@ export function Footer() {
     <footer className="mt-auto border-t border-[#141414] bg-black">
       <div className="mx-auto max-w-[1600px] px-4 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <p className="text-[11px] text-[#666] leading-relaxed max-w-xl">
-          Memphis unBLACKed — 1,600+ popular games, 50 apps, Spotify, YouTube and
+          Memphis unBLACKed — 3,500+ popular games, 50 apps, Spotify, YouTube and
           unlimited GLM AI, on a Scramjet proxy (epoxy / libcurl over a
           self-hosted wisp relay). Provided as-is; use responsibly and follow
           your network&apos;s rules.

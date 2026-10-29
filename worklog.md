@@ -269,3 +269,25 @@ Stage Summary:
 
 Stage Summary:
 - Catalog scaled 1,574 → 1,680 with the reference's most popular games (Vex series completed, 7 Minecraft eras, 19 FNF mods, Duck Life/Riddle School/Fireboy/Bad Ice Cream/Bloons TD/World's Hardest series); pipeline is a third re-runnable script (merge-tungtung-games) with per-game source overrides; player gained srcdoc rendering for jsdelivr-hosted games.
+
+## Full tung-tung catalog import session (2026-10-30, later)
+
+- User request: "Add as many games as you can" — bulk-import the reference's ENTIRE /play catalog, not just the curated 106.
+- New script scripts/import-all-tungtung.mjs (idempotent, "tta-" batch):
+  * Fetches all 6 reference lists (3kh0 370, hydra 872, gn-math 809, seraph 468, ports 107, tglsc 83) → 2,360 unique titles; priority jsdelivr > reference domain when a title exists in several lists.
+  * Dedupe: normalized title vs the whole existing catalog (curated + tt- + gf- + builtins), URL dedupe inside the batch, junk filter (numeric-only names like "1", <3 alnum chars).
+  * Categories from a tiered title-keyword classifier (the lists carry no genre info): 19 ordered regex rules, rhythm/card/idle/horror/sandbox/simulation/sports/racing/two-player/io/shooter/fighting/platformer/strategy/puzzle/adventure/classic/casual/action → arcade default; franchise tags (fnf, minecraft, slope, subway-surfers…) + "unblocked".
+  * prettyTitle(): all-lowercase names ("subway surfers") → Title Case, protecting acronyms (fnf/fnf/fnf/io/gta) and dotted names (1v1.lol, agar.io).
+  * Descriptions templated per list label; sizes from the same per-category SIZES map as the GameFlare batch.
+- BUG FOUND & FIXED (assembly prefix clash): "tta-…".startsWith("tt-") is FALSE, so run 1's bulk batch leaked into "curated" on re-run and got duplicated (5,819 games with dup ids). Fix: filter both "tt-" AND "tta-" out of the curated bucket; restored from backup and re-ran clean.
+- DISCOVERY (dead payloads): page-level verification (HTTP 200 + frame headers) is NOT enough — jsdelivr has banned whole GitHub users (e.g. genizy: "User genizy is blocked", HTTP 403), so every game whose build files live under gh/genizy/* (the whole "emu" console-mirror set: Ace Combat, Crash Bandicoot, Final Fantasy, COD, DBZ…) renders a blank white canvas ON THE REFERENCE TOO. Sample audit: 19/40 reference-domain games had dead CDN deps (also dead: polyfill.io, smashkartsgc.b-cdn.net, various s3 buckets, bitbucket raw).
+  * Added phase-2 payload verification to the import script: extract each page's game-critical asset URLs (absolute src/href with payload extensions, quoted .wasm/.unityweb/.data URLs, Unity buildUrl + "/….loader.js" patterns), ranged-GET each (≤8), drop the game when any answers ≥ 400. Network errors count as unverifiable (kept), analytics + legacy polyfills (polyfill.io, ie7-js.googlecode, html5shiv…) are non-critical (kept).
+  * The tt- curated batch gets the same audit each run — 6 dead picks dropped this session; their titles re-entered the bulk candidates and 3 came back via intact alternate-list mirrors.
+- /api/games: catalog cache is now mtime-aware (stat games.json per request, reload on change) so catalog rebuilds go live without a server restart; comment + counts updated to 3,700+.
+- FINAL CATALOG: 3,587 games = 62 curated + 100 tt picks + 1,913 tta bulk (285 via 3kh0 CDN, 641 via hydra CDN, 987 via reference domain) + 1,500 GameFlare + 12 builtins; 1,265KB; 21 categories (arcade 1,378, action 273, racing 230, platformer 191, shooter 171, rhythm 171, simulation 164, horror 140, casual 135, sports 119, puzzle 115, io 94, strategy 94, adventure 89, sandbox 86, fighting 41, classic 29, card 27, idle 24, two-player 15, trivia 1). 0 duplicate ids, 0 duplicate normalized titles, 99% thumbnails.
+- VERIFIED (agent-browser via Caddy :81 + VLM screenshots): Play header shows "3,587 GAMES READY" with live category counts; Death Run 3D (jsdelivr srcdoc path) renders its full Y8-style title menu; Granny (reference-domain direct iframe) streams its 567MB Unity payload (LOADING… progress) — both embed paths healthy; Block Blast & the genizy/emu set correctly purged from search.
+- Copy updated 1,600+ → 3,500+: types.ts nav, footer, home-view (5 spots).
+- eslint 0 errors, tsc clean, next build passes (14 routes).
+
+Stage Summary:
+- Catalog scaled 1,680 → 3,587 (+1,907) with the reference's complete playable catalog; the import pipeline is now two complementary re-runnable scripts (merge-tungtung-games for curated picks with hand-written blurbs, import-all-tungtung for the full catalog with payload liveness checks) and the API serves catalog updates live via mtime reload.

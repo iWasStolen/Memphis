@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const QUICK = [
-  { icon: Gamepad2, label: "Play", desc: "1,600+ popular games", view: "play" as const },
+  { icon: Gamepad2, label: "Play", desc: "3,500+ popular games", view: "play" as const },
   { icon: Boxes, label: "Apps", desc: "50 real apps", view: "apps" as const },
   { icon: MessagesSquare, label: "Chat", desc: "Community", view: "chat" as const },
   { icon: Sparkles, label: "AI", desc: "GLM · free · unlimited", view: "ai" as const },
@@ -30,7 +30,7 @@ const QUICK = [
 const FEATURES = [
   {
     icon: Gamepad2,
-    name: "1,600+ popular games, all playable",
+    name: "3,500+ popular games, all playable",
     body: "A full HTML5 arcade: the most-played action, racing, puzzle, horror, sports, two-player and .io games on the web — FNAF, Papa's, Moto X3M, Sprunki, Bloons, Getaway Shootout and hundreds more — every one verified to run in the page, plus 12 classics that ship inside the app. Search, filter by category, favorite the ones you love and play fullscreen.",
   },
   {
@@ -82,7 +82,7 @@ export default function HomeView() {
             Everything, unblocked.
           </h1>
           <p className="mt-5 text-sm sm:text-base text-[#9a9a9a] max-w-2xl mx-auto leading-relaxed">
-            1,600+ popular games, 50 real apps, Spotify, YouTube and an unlimited
+            3,500+ popular games, 50 real apps, Spotify, YouTube and an unlimited
             GLM-powered AI — all running on a Scramjet proxy that renders the real
             web inside this page. Pure black and white, nothing else.
           </p>
@@ -92,7 +92,7 @@ export default function HomeView() {
               className="bg-white text-black hover:bg-[#e0e0e0]"
             >
               <Gamepad2 className="size-4 mr-2" />
-              Play 1,600+ popular games
+              Play 3,500+ popular games
             </Button>
             <Button
               variant="outline"

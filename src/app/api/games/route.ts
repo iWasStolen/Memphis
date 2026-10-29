@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { GameDef } from "@/lib/types";
 import { BUILTIN_GAMES } from "@/lib/games-builtin";
@@ -7,11 +7,16 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /* ------------------------------------------------------------
-   /api/games — catalog of 1,600+ verified playable games
-   Sources: data/games.json (hand-curated official sites +
-   GameFlare most-played catalog, every embed verified) + the
-   built-in canvas games that ship with the app.
+   /api/games — catalog of 3,700+ verified playable games
+   Sources: data/games.json (hand-curated official sites, the
+   full tung tung reference catalog and the GameFlare most-played
+   list, every embed verified) + the built-in canvas games that
+   ship with the app.
    Query: q, cat, ids, page, per, sort, meta
+
+   The parsed catalog is cached in-module, but reloaded whenever
+   games.json's mtime changes — so catalog rebuilds (import scripts)
+   go live without a server restart.
    ------------------------------------------------------------ */
 
 interface RawGame {
@@ -37,6 +42,8 @@ interface Catalog {
   games: RawGame[];
 }
 
+const CATALOG_PATH = path.join(process.cwd(), "data", "games.json");
+
 const BUILTIN_SCORES: Record<string, { hasScore: true; scoreLabel: string }> = {
   "2048": { hasScore: true, scoreLabel: "points" },
   snake: { hasScore: true, scoreLabel: "apples" },
@@ -52,10 +59,17 @@ const BUILTIN_SCORES: Record<string, { hasScore: true; scoreLabel: string }> = {
   clicker: { hasScore: true, scoreLabel: "total voids" },
 };
 
-let cache: { catalog: Catalog; games: GameDef[] } | null = null;
+let cache: { catalog: Catalog; games: GameDef[]; mtime: number } | null = null;
 
 async function loadCatalog(): Promise<{ catalog: Catalog; games: GameDef[] }> {
-  if (cache) return cache;
+  /* reload when the file changed on disk (catalog rebuilt by a script) */
+  let mtime = 0;
+  try {
+    mtime = (await stat(CATALOG_PATH)).mtimeMs;
+  } catch {
+    /* file missing — fall back to builtins below */
+  }
+  if (cache && cache.mtime === mtime) return cache;
   let catalog: Catalog = {
     generatedAt: "",
     total: 0,
@@ -63,7 +77,7 @@ async function loadCatalog(): Promise<{ catalog: Catalog; games: GameDef[] }> {
     games: [],
   };
   try {
-    const raw = await readFile(path.join(process.cwd(), "data", "games.json"), "utf8");
+    const raw = await readFile(CATALOG_PATH, "utf8");
     catalog = JSON.parse(raw) as Catalog;
   } catch {
     /* catalog file missing — fall back to builtins below */
@@ -110,7 +124,7 @@ async function loadCatalog(): Promise<{ catalog: Catalog; games: GameDef[] }> {
     });
   }
 
-  cache = { catalog, games };
+  cache = { catalog, games, mtime };
   return cache;
 }
 
