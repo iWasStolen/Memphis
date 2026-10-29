@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useUI, useSettings, lsGet, lsSet } from "@/lib/store";
 import { proxiedHref, resetProxy } from "@/lib/scramjet";
+import { proxyDiagnostics, swUnavailableGuidance, type SwGuidance } from "@/lib/proxy-guidance";
 import { SEARCH_ENGINES } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +23,9 @@ import {
   ShieldAlert,
   Clock,
   Loader2,
+  Copy,
+  Check,
+  Lock,
 } from "lucide-react";
 
 interface Tab {
@@ -46,14 +50,23 @@ const QUICK_LINKS = [
   { name: "example.com", url: "https://example.com", hint: "test page" },
 ];
 
+/* crypto.randomUUID is a secure-context-only API — on insecure origins
+   (where the proxy guidance screen must still render) it is undefined,
+   so fall back to a random id. Same shape, no security relevance:
+   these ids only key React lists and force iframe reloads. */
+function uid(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function newTab(): Tab {
   return {
-    id: crypto.randomUUID(),
+    id: uid(),
     url: null,
     title: "New tab",
     stack: [],
     idx: -1,
-    jar: crypto.randomUUID(),
+    jar: uid(),
   };
 }
 
@@ -67,11 +80,37 @@ export default function BrowseView() {
   const [fullscreen, setFullscreen] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<{ url: string; title: string; at: number }[]>([]);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const [showUrlFallback, setShowUrlFallback] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const loadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const active = tabs.find((t) => t.id === activeId) ?? tabs[0];
+
+  /* when the ServiceWorker API itself is missing the boot can never
+     succeed in this browsing context (iOS in-app browser, private
+     window, plain HTTP…) — swap the generic error for targeted,
+     platform-correct recovery steps */
+  const swGuidance: SwGuidance | null =
+    proxyState === "error" &&
+    typeof window !== "undefined" &&
+    !proxyDiagnostics().serviceWorker
+      ? swUnavailableGuidance()
+      : null;
+
+  const copySiteLink = async () => {
+    const url = swGuidance?.httpsHref ?? window.location.href;
+    try {
+      await navigator.clipboard.writeText(url);
+      setLinkCopied(true);
+      window.setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      /* insecure contexts don't get the async clipboard — surface
+         the URL as selectable text instead */
+      setShowUrlFallback(true);
+    }
+  };
 
   /* encoded iframe source for the active tab */
   const [frameSrc, setFrameSrc] = useState<string>("");
@@ -200,7 +239,7 @@ export default function BrowseView() {
     if (!active?.url) return;
     setLoading(true);
     setTabs((cur) =>
-      cur.map((t) => (t.id === active.id ? { ...t, jar: crypto.randomUUID() } : t))
+      cur.map((t) => (t.id === active.id ? { ...t, jar: uid() } : t))
     );
   };
 
@@ -473,7 +512,50 @@ export default function BrowseView() {
                 <h2 className="text-base font-semibold text-white">
                   {proxyStage === "transport" ? "Proxy transport failed" : "Proxy engine failed to start"}
                 </h2>
-                <p className="text-[13px] text-[#8f8f8f] max-w-md">{proxyError}</p>
+                {swGuidance ? (
+                  <>
+                    <p className="text-[13px] text-[#8f8f8f] max-w-md">{swGuidance.cause}</p>
+                    <ol className="text-[13px] text-[#c9c9c9] max-w-md text-left space-y-1.5 list-decimal list-inside leading-relaxed">
+                      {swGuidance.steps.map((step, i) => (
+                        <li key={i}>{step}</li>
+                      ))}
+                    </ol>
+                    <div className="flex flex-wrap items-center justify-center gap-2 mt-1">
+                      {swGuidance.httpsHref && (
+                        <a
+                          href={swGuidance.httpsHref}
+                          className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-[13px] font-medium text-black hover:bg-[#e0e0e0]"
+                        >
+                          <Lock className="size-4" /> Open HTTPS version
+                        </a>
+                      )}
+                      {swGuidance.copyLink && (
+                        <Button
+                          variant="outline"
+                          onClick={copySiteLink}
+                          className="border-[#262626] bg-transparent text-[#ccc] hover:bg-[#101010] hover:text-white"
+                        >
+                          {linkCopied ? (
+                            <>
+                              <Check className="size-4 mr-2" /> Link copied
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="size-4 mr-2" /> Copy site link
+                            </>
+                          )}
+                        </Button>
+                      )}
+                    </div>
+                    {showUrlFallback && (
+                      <p className="text-[12px] text-[#8f8f8f] max-w-md break-all select-all font-mono">
+                        {swGuidance.httpsHref ?? window.location.href}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-[13px] text-[#8f8f8f] max-w-md">{proxyError}</p>
+                )}
                 {proxyDiag && (
                   <p className="text-[11px] text-[#555] font-mono max-w-md">{proxyDiag}</p>
                 )}
@@ -495,10 +577,12 @@ export default function BrowseView() {
                     Reload page
                   </Button>
                 </div>
-                <p className="text-[11px] text-[#4a4a4a] max-w-md mt-2 leading-relaxed">
-                  If it keeps failing, try another browser (Chrome / Edge / Firefox), disable
-                  ad-blockers for this site, or allow site data in your browser settings.
-                </p>
+                {!swGuidance && (
+                  <p className="text-[11px] text-[#4a4a4a] max-w-md mt-2 leading-relaxed">
+                    If it keeps failing, try another browser (Chrome / Edge / Firefox), disable
+                    ad-blockers for this site, or allow site data in your browser settings.
+                  </p>
+                )}
               </>
             ) : (
               <>
@@ -582,12 +666,14 @@ export default function BrowseView() {
           scramjet · {settings.transport}
         </span>
         <span className="hidden sm:inline">· wisp relay</span>
-        <span className="hidden sm:inline">· sw active</span>
+        {proxyState === "ready" && <span className="hidden sm:inline">· sw active</span>}
         <span className="flex-1" />
         <span>
-          {active?.url
-            ? `${loading ? "loading…" : "ready"}`
-            : "new tab"}
+          {proxyState === "error"
+            ? "engine failed"
+            : active?.url
+              ? `${loading ? "loading…" : "ready"}`
+              : "new tab"}
         </span>
       </div>
     </div>

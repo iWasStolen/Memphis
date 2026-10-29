@@ -159,10 +159,14 @@ GLM SDK.
 ## Troubleshooting — "Proxy engine failed to start"
 
 The error screen tells you which stage failed and shows a diagnostics line
-like `Chrome · SW:y · ctl:y · SharedWorker:y · storage:y · engine:y`.
+like `Chrome · https:y · SW:y · ctl:y · SharedWorker:y · storage:y · engine:y`.
+When the ServiceWorker API itself is missing (`SW:n`), the screen swaps the
+generic error for platform-correct recovery steps (see `src/lib/proxy-guidance.ts`).
 
 | Symptom / diagnostics | Cause | Fix |
 | --- | --- | --- |
+| `SW:n` (no ServiceWorker API at all) | The browsing context hides it: iPhone/iPad in-app browsers (links opened inside chat/social apps), Safari Private Browsing, or a plain-HTTP address | Follow the numbered steps on the error screen: on iOS use “Open in Safari” from the Share menu / a normal (non-private) window; elsewhere open the **HTTPS version** button or use Chrome/Edge/Firefox |
+| `https:n` | Page loaded over plain HTTP | Tap **Open HTTPS version** (or copy the link) and reload |
 | `storage:n` | Browser blocks site data ("Block all cookies") | Allow site data for this site; an in-memory fallback keeps the session working either way |
 | `engine:n` persisting | An extension or filter blocks the engine scripts | Disable the ad-blocker for this site, then press **Retry** (the boot re-injects the scripts) |
 | `ctl:y` but pages error | A service worker from an older deployment is stale | Hard refresh; the app re-registers `/sw.js` and reloads itself once on takeover |

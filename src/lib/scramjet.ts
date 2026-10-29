@@ -34,6 +34,7 @@
    ============================================================ */
 
 import type { ProxyTransport } from "./types";
+import { swUnavailableGuidance } from "./proxy-guidance";
 
 /* ---------------- v2 runtime types ---------------- */
 
@@ -251,64 +252,11 @@ export async function ensureControllerDB(): Promise<void> {
 
 /* ---------------- diagnostics ---------------- */
 
-export interface ProxyDiagnostics {
-  ua: string;
-  sharedWorker: boolean;
-  serviceWorker: boolean;
-  controlled: boolean;
-  isolated: boolean;
-  scramjetGlobal: boolean;
-  controllerGlobal: boolean;
-  localStorage: boolean;
-}
-
-/** Environment snapshot rendered on the proxy error screen. */
-export function proxyDiagnostics(): ProxyDiagnostics {
-  if (typeof window === "undefined") {
-    return {
-      ua: "", sharedWorker: false, serviceWorker: false, controlled: false,
-      isolated: false, scramjetGlobal: false, controllerGlobal: false, localStorage: false,
-    };
-  }
-  let storageOk = false;
-  try {
-    window.localStorage.getItem("__probe__");
-    storageOk = true;
-  } catch { /* blocked */ }
-  return {
-    ua: navigator.userAgent,
-    sharedWorker: typeof SharedWorker !== "undefined",
-    serviceWorker: "serviceWorker" in navigator,
-    controlled: !!navigator.serviceWorker?.controller,
-    isolated: !!window.crossOriginIsolated,
-    scramjetGlobal: !!window.$scramjet,
-    controllerGlobal: !!window.$scramjetController,
-    localStorage: storageOk,
-  };
-}
-
-/** One-line summary for the error screen / bug reports. */
-export function diagnosticsLine(d: ProxyDiagnostics): string {
-  const browser = /Edg\//.test(d.ua)
-    ? "Edge"
-    : /OPR\//.test(d.ua)
-      ? "Opera"
-      : /Chrome\//.test(d.ua) && !/Chromium|Edg|OPR/.test(d.ua)
-        ? "Chrome"
-        : /Firefox\//.test(d.ua)
-          ? "Firefox"
-          : /Safari\//.test(d.ua)
-            ? "Safari"
-            : "Unknown";
-  return [
-    browser,
-    `SW:${d.serviceWorker ? "y" : "n"}`,
-    `ctl:${d.controlled ? "y" : "n"}`,
-    `SharedWorker:${d.sharedWorker ? "y" : "n"}`,
-    `storage:${d.localStorage ? "y" : "n"}`,
-    `engine:${d.scramjetGlobal ? "y" : "n"}`,
-  ].join(" · ");
-}
+/* proxyDiagnostics / diagnosticsLine / swUnavailableGuidance live in
+   ./proxy-guidance (pure, node-testable) — re-exported here for the
+   existing import sites (app-shell, browse-view). */
+export { proxyDiagnostics, diagnosticsLine, swUnavailableGuidance } from "./proxy-guidance";
+export type { ProxyDiagnostics, SwGuidance } from "./proxy-guidance";
 
 /* ---------------- boot ---------------- */
 
@@ -347,11 +295,11 @@ export function bootProxy(transport: ProxyTransport = "epoxy"): Promise<ProxyHan
 
   bootPromise = (async () => {
     if (!("serviceWorker" in navigator)) {
-      throw stageError(
-        "engine",
-        "This browser does not support service workers, which the proxy needs. " +
-        "Try Chrome, Edge or Firefox over HTTPS."
-      );
+      /* the API is environment-gated (iOS in-app browsers, Safari
+         Private Browsing, plain HTTP…) and the proxy can never start
+         here — produce platform-correct recovery guidance */
+      const guidance = swUnavailableGuidance();
+      throw stageError("engine", `${guidance.cause} ${guidance.steps.join(" ")}`);
     }
 
     /* stage 1 — service worker must exist FIRST: the Controller
@@ -373,11 +321,16 @@ export function bootProxy(transport: ProxyTransport = "epoxy"): Promise<ProxyHan
         throw new Error("the service worker did not become active");
       }
     } catch (err) {
+      const iosHint = /iP(?:hone|ad|od)/.test(navigator.userAgent)
+        ? " On iPhone / iPad also make sure this is a normal window (not a Private one) " +
+          "and that the link wasn't opened inside another app."
+        : "";
       throw stageError(
         "engine",
         "The proxy service worker could not register. Make sure the page is " +
-        "loaded over HTTPS (not an insecure iframe) and site data is allowed. " +
-        `(${err instanceof Error ? err.message : String(err)})`
+        "loaded over HTTPS (not an insecure iframe) and site data is allowed." +
+        iosHint +
+        ` (${err instanceof Error ? err.message : String(err)})`
       );
     }
 
