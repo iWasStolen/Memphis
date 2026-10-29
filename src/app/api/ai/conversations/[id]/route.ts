@@ -25,11 +25,14 @@ export async function GET(req: Request, ctx: Ctx) {
     where: { id, sessionId: sessionId! },
   });
   if (!conversation) return Response.json({ error: "Not found" }, { status: 404 });
-  const messages = await db.aIMessage.findMany({
-    where: { conversationId: id },
-    orderBy: { createdAt: "asc" },
-    take: 500,
-  });
+  /* newest 500 messages, restored to chronological order */
+  const messages = (
+    await db.aIMessage.findMany({
+      where: { conversationId: id },
+      orderBy: { createdAt: "desc" },
+      take: 500,
+    })
+  ).reverse();
   return Response.json({ conversation, messages });
 }
 
@@ -51,13 +54,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
     where: { id, sessionId: sessionId! },
   });
   if (!conversation) return Response.json({ error: "Not found" }, { status: 404 });
+  /* JSON bodies may carry non-strings — coerce so .slice never throws */
+  const title = body.title !== undefined ? String(body.title ?? "").slice(0, 60) : undefined;
+  const instructions =
+    body.instructions !== undefined ? String(body.instructions ?? "").slice(0, 1000) : undefined;
   const updated = await db.aIConversation.update({
     where: { id },
     data: {
-      ...(body.title !== undefined ? { title: body.title.slice(0, 60) } : {}),
-      ...(body.instructions !== undefined
-        ? { instructions: body.instructions.slice(0, 1000) }
-        : {}),
+      ...(title !== undefined ? { title } : {}),
+      ...(instructions !== undefined ? { instructions } : {}),
     },
   });
   return Response.json({ conversation: updated });

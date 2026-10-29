@@ -27,14 +27,16 @@ export async function POST(req: Request) {
     });
     if (!conversation)
       return Response.json({ error: "Conversation not found" }, { status: 404 });
-    const messages = await db.aIMessage.findMany({
-      where: { conversationId: conversation.id },
-      orderBy: { createdAt: "asc" },
-      take: 30,
-    });
+    const messages = (
+      await db.aIMessage.findMany({
+        where: { conversationId: conversation.id },
+        orderBy: { createdAt: "desc" },
+        take: 30,
+      })
+    ).reverse();
     source = messages.map((m) => `${m.role}: ${m.content}`).join("\n").slice(-6000);
   } else if (body.topic) {
-    source = `Topic: ${body.topic.slice(0, 300)}`;
+    source = `Topic: ${String(body.topic).slice(0, 300)}`;
   }
   if (!source.trim())
     return Response.json(

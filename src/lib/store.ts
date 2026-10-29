@@ -203,21 +203,27 @@ export async function api<T = unknown>(
   options: RequestInit = {}
 ): Promise<{ ok: boolean; status: number; data: T }> {
   const token = getToken();
-  const res = await fetch(path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers || {}),
-    },
-  });
-  let data: unknown = null;
   try {
-    data = await res.json();
+    const res = await fetch(path, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers || {}),
+      },
+    });
+    let data: unknown = null;
+    try {
+      data = await res.json();
+    } catch {
+      /* non-json */
+    }
+    return { ok: res.ok, status: res.status, data: data as T };
   } catch {
-    /* non-json */
+    /* network failure / offline — callers get a uniform {ok:false}
+       instead of an unhandled rejection that sticks busy-states */
+    return { ok: false, status: 0, data: null as T };
   }
-  return { ok: res.ok, status: res.status, data: data as T };
 }
 
 /* ---------------- Session timer ---------------- */

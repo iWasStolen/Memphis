@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { GameDef } from "@/lib/types";
 import { useUI, lsGet, lsSet } from "@/lib/store";
 import { proxiedHref } from "@/lib/scramjet";
@@ -15,6 +15,7 @@ import {
   RotateCw,
   ExternalLink,
   Loader2,
+  Trophy,
 } from "lucide-react";
 
 import Game2048 from "./builtin/game-2048";
@@ -45,6 +46,13 @@ const BUILTIN: Record<string, React.ComponentType> = {
   clicker: Clicker,
 };
 
+interface ScoreRow {
+  id: string;
+  name: string;
+  score: number;
+  createdAt: string;
+}
+
 export function GamePlayer({
   game,
   onClose,
@@ -60,9 +68,17 @@ export function GamePlayer({
   const [fullscreen, setFullscreen] = useState(false);
   const [fav, setFav] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  /* leaderboard (built-in games with scores) */
+  const [showScores, setShowScores] = useState(false);
+  const [scores, setScores] = useState<ScoreRow[]>([]);
+  const [scoresLoading, setScoresLoading] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
   const startedAt = useRef(Date.now());
   const [elapsed, setElapsed] = useState(0);
+  /* iframes never fire `error` for X-Frame-Options/CSP refusals — track
+     whether the load event arrived so the timeout heuristic can tell
+     "still nothing after 9s" (dead server / hard block) from "loaded" */
+  const iframeLoadedRef = useRef(false);
 
   useEffect(() => {
     setFav(lsGet<string[]>("memphis-fav-games", []).includes(game.id));
@@ -130,6 +146,39 @@ export function GamePlayer({
     };
   }, [embedMode, game.url]);
 
+  /* embed-failure heuristic: direct embeds that produce NO load event
+     within 9s are treated as failed (down / blocked). Refusals that DO
+     fire load stay on the manual "not working?" path — browsers give
+     no signal to tell them apart from a successful cross-origin load. */
+  const embedKey = `${embedMode}-${reloadKey}`;
+  useEffect(() => {
+    iframeLoadedRef.current = false;
+    if (game.builtin || !game.url) return;
+    const t = setTimeout(() => {
+      if (!iframeLoadedRef.current) setLoadFailed(true);
+    }, 9000);
+    return () => clearTimeout(t);
+  }, [embedKey, game.builtin, game.url]);
+
+  /* ---------- leaderboard ---------- */
+  const loadScores = useCallback(async () => {
+    if (!game.builtin || !game.hasScore) return;
+    setScoresLoading(true);
+    try {
+      const r = await fetch(`/api/games/scores?game=${encodeURIComponent(game.id)}`);
+      const data = (await r.json().catch(() => ({}))) as { scores?: ScoreRow[] };
+      setScores(data.scores ?? []);
+    } catch {
+      setScores([]);
+    } finally {
+      setScoresLoading(false);
+    }
+  }, [game.id, game.builtin, game.hasScore]);
+
+  useEffect(() => {
+    if (showScores) void loadScores();
+  }, [showScores, loadScores]);
+
   /* switching games (catalog → player) resets the mode from the flag */
   useEffect(() => {
     setEmbedMode(game.proxy ? "proxy" : "direct");
@@ -138,6 +187,7 @@ export function GamePlayer({
   }, [game.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const Builtin = game.builtin ? BUILTIN[game.id] : null;
+  const scoresOpen = showScores && game.builtin && game.hasScore;
 
   return (
     <div
@@ -176,6 +226,19 @@ export function GamePlayer({
           >
             <Star className={`size-4 ${fav ? "fill-white text-white" : ""}`} />
           </Button>
+          {game.builtin && game.hasScore && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className={`size-8 hover:bg-[#141414] ${showScores ? "text-white" : "text-[#9a9a9a] hover:text-white"}`}
+              onClick={() => setShowScores((s) => !s)}
+              aria-label="Toggle top scores"
+              aria-pressed={showScores}
+              title="Top scores"
+            >
+              <Trophy className="size-4" />
+            </Button>
+          )}
           {!game.builtin && (
             <Button
               variant="ghost"
@@ -216,6 +279,58 @@ export function GamePlayer({
 
       {/* stage */}
       <div className="flex-1 min-h-0 relative bg-black">
+        {scoresOpen && (
+          <div className="absolute right-2 top-2 z-20 w-64 max-h-[75%] overflow-y-auto bg-black border border-[#262626] rounded-md p-3 shadow-2xl memphis-scroll">
+            <div className="flex items-center justify-between mb-2 gap-2">
+              <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                <Trophy className="size-3.5" /> Top scores
+              </span>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-6 text-[#888] hover:text-white"
+                  onClick={() => void loadScores()}
+                  aria-label="Refresh scores"
+                  title="Refresh"
+                >
+                  <RotateCw className="size-3" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-6 text-[#888] hover:text-white"
+                  onClick={() => setShowScores(false)}
+                  aria-label="Close scores"
+                >
+                  <X className="size-3.5" />
+                </Button>
+              </div>
+            </div>
+            {scoresLoading ? (
+              <div className="flex justify-center py-4">
+                <Loader2 className="size-4 animate-spin text-white" />
+              </div>
+            ) : scores.length === 0 ? (
+              <p className="text-[11px] text-[#777]">No scores yet — be the first.</p>
+            ) : (
+              <ol className="space-y-1">
+                {scores.map((s, i) => (
+                  <li key={s.id} className="flex items-center justify-between gap-2 text-[11px] font-mono">
+                    <span className="text-[#aaa] truncate">
+                      <span className="text-[#555] mr-1">{i + 1}.</span>
+                      {s.name}
+                    </span>
+                    <span className="text-white shrink-0">{s.score.toLocaleString()}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            <p className="mt-2 pt-2 border-t border-[#1a1a1a] text-[10px] text-[#555]">
+              {game.scoreLabel ?? "points"} · top 15 · {game.name}
+            </p>
+          </div>
+        )}
         {Builtin ? (
           <Builtin />
         ) : loadFailed ? (
@@ -258,11 +373,14 @@ export function GamePlayer({
           </div>
         ) : (
           <iframe
-            key={`${embedMode}-${reloadKey}`}
+            key={embedKey}
             src={embedMode === "proxy" ? proxySrc : game.url}
             className="w-full h-full border-0 bg-black"
             title={game.name}
             allow="fullscreen; autoplay; gamepad; clipboard-write"
+            onLoad={() => {
+              iframeLoadedRef.current = true;
+            }}
             onError={() => setLoadFailed(true)}
           />
         )}

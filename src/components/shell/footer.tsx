@@ -37,7 +37,10 @@ export function Footer() {
             variant="outline"
             size="sm"
             className="h-6 text-[11px] border-[#222] text-[#8f8f8f] hover:text-white hover:border-[#3a3a3a]"
-            onClick={() => useUI.getState().setReportTarget({ kind: "other", target: "General feedback" })}
+            onClick={() => {
+              useUI.getState().setReportTarget({ kind: "other", target: "General feedback" });
+              useUI.getState().openModal("report");
+            }}
           >
             Report an issue
           </Button>

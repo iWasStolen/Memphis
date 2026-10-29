@@ -31,7 +31,7 @@ const FEATURES = [
   {
     icon: Gamepad2,
     name: "74 popular games, hand-verified",
-    body: "A full HTML5 arcade: action, racing, puzzle, sports, two-player and .io games streamed from a real game network, plus 18 classics that ship inside the app. Search, filter by category, favorite the ones you love and play fullscreen — every card launches a real, playable game.",
+    body: "A full HTML5 arcade: action, racing, puzzle, sports, two-player and .io games streamed from a real game network, plus 12 classics that ship inside the app. Search, filter by category, favorite the ones you love and play fullscreen — every card launches a real, playable game.",
   },
   {
     icon: Boxes,

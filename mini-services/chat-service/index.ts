@@ -245,6 +245,27 @@ function canAccessChannel(u: UserRow, channel: { id: string; isPrivate: number }
     .get(channel.id, u.id);
 }
 
+/** A dmKey is addressable by a user only if they are a party to it:
+    "u:<idA>:<idB>" (either order) or "g:<groupId>" they belong to.
+    Without this check any authenticated socket could inject messages
+    into other people's DMs / groups. */
+function canUseDmKey(u: UserRow, dmKey: string): boolean {
+  const key = String(dmKey || "");
+  if (key.startsWith("g:")) {
+    const gid = key.slice(2);
+    if (!/^[a-z0-9]+$/i.test(gid)) return false;
+    return !!db
+      .query("SELECT id FROM GroupMember WHERE groupId = ? AND userId = ?")
+      .get(gid, u.id);
+  }
+  if (key.startsWith("u:")) {
+    const parts = key.slice(2).split(":");
+    if (parts.length !== 2) return false;
+    return parts.includes(u.id);
+  }
+  return false;
+}
+
 function insertMessage(
   userId: string,
   content: string,
@@ -444,6 +465,11 @@ io.on("connection", (socket: Socket) => {
       return cb?.({ error: `Auto-mute: severe language. Muted for ${secs}s.` });
     }
 
+    /* dmKey authorization — the sender must be a party to the DM/group */
+    if (p.dmKey && !canUseDmKey(u, String(p.dmKey))) {
+      return cb?.({ error: "No access" });
+    }
+
     const id = insertMessage(u.id, text, { channelId: p.channelId, dmKey: p.dmKey });
     const msg = messageWithJoins(id);
 
@@ -518,7 +544,15 @@ io.on("connection", (socket: Socket) => {
   });
 
   socket.on("dm:join", (key: string) => {
-    socket.join("dm:" + key);
+    /* joining requires being a party to the room (dm:open/group:open
+       still join implicitly after their own authz checks) */
+    const k = String(key || "");
+    if (k && canUseDmKey(user!, k)) socket.join("dm:" + k);
+  });
+
+  socket.on("dm:leave", (key: string) => {
+    const k = String(key || "");
+    if (k) socket.leave("dm:" + k);
   });
 
   /* ---- groups ---- */
@@ -605,7 +639,13 @@ io.on("connection", (socket: Socket) => {
       const o = db
         .query("SELECT id, username, displayName, avatarUrl, status, role FROM User WHERE id = ?")
         .get((r as { otherId: string }).otherId);
-      return { id: (r as { id: string }).id, status: (r as { status: string }).status, user: o };
+      return {
+        id: (r as { id: string }).id,
+        status: (r as { status: string }).status,
+        user: o,
+        /* direction lets the client split incoming vs outgoing requests */
+        direction: (r as { initiatorId: string }).initiatorId === user!.id ? "outgoing" : "incoming",
+      };
     });
     cb?.(out);
   });
@@ -672,9 +712,18 @@ io.on("connection", (socket: Socket) => {
     const q = String(p?.question ?? "").slice(0, 140).trim();
     const options = (p?.options ?? []).map((o) => String(o).slice(0, 60).trim()).filter(Boolean).slice(0, 4);
     if (!q || options.length < 2) return cb?.({ error: "Need a question and at least 2 options" });
+    /* the poll lands in a channel — the creator needs access to it */
+    const ch = db.query("SELECT * FROM Channel WHERE id = ?").get(String(p?.channelId ?? "")) as
+      | { id: string; isPrivate: number; locked: number }
+      | undefined;
+    const u = freshUser();
+    if (!ch) return cb?.({ error: "Channel not found" });
+    if (!canAccessChannel(u, ch)) return cb?.({ error: "No access" });
+    if (ch.locked && !isStaff(u)) return cb?.({ error: "Channel is locked" });
+    if (muted(u)) return cb?.({ error: `You are muted until ${new Date(u.mutedUntil!).toLocaleTimeString()}` });
     const endsAt = Date.now() + Math.min(1440, Math.max(1, p?.minutes ?? 15)) * 60000;
     const poll = { question: q, options: options.map((text) => ({ text, voters: [] })), endsAt };
-    const id = insertMessage(user!.id, q, { channelId: p.channelId, poll });
+    const id = insertMessage(u.id, q, { channelId: p.channelId, poll });
     const msg = messageWithJoins(id);
     io.to("ch:" + p.channelId).emit("chat:message", msg);
     cb?.({ ok: true });
@@ -739,7 +788,9 @@ io.on("connection", (socket: Socket) => {
     const cfg = settings();
     if (!cfg.soundboard) return;
     if (muted(freshUser())) return;
-    io.emit("sound:play", { soundId: String(soundId).slice(0, 24), by: user!.username });
+    /* broadcast to everyone EXCEPT the sender — the client already
+       played the sound locally, so io.emit would double it for them */
+    socket.broadcast.emit("sound:play", { soundId: String(soundId).slice(0, 24), by: user!.username });
   });
 
   /* ---- listen party ---- */

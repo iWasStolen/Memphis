@@ -78,6 +78,18 @@ export default function PlayView() {
   /* (re)load the first page when the query changes */
   useEffect(() => {
     let cancelled = false;
+    /* empty favorites / recents must show their empty state — without
+       this guard the request would fall through to the full catalog */
+    if (
+      (filter === "favorites" && favs.length === 0) ||
+      (filter === "recent" && recents.length === 0)
+    ) {
+      setGames([]);
+      setTotal(0);
+      setPage(1);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     fetch(buildUrl(1))
       .then((r) => r.json())

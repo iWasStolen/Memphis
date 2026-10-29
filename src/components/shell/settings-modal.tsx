@@ -157,14 +157,26 @@ export function SettingsModal() {
       const icon =
         document.querySelector<HTMLLinkElement>("link[rel~='icon']")?.href ??
         "/memphis.svg";
-      w.document.write(
-        `<!doctype html><html><head><title>${title}</title>` +
-          `<link rel="icon" href="${icon}">` +
-          `<style>html,body{margin:0;height:100%;overflow:hidden;background:#000}` +
-          `iframe{border:0;width:100%;height:100%}</style></head>` +
-          `<body><iframe src="${location.href}"></iframe></body></html>`
-      );
-      w.document.close();
+      /* build the cloak document with DOM APIs — interpolating the
+         (user-controlled) title/icon into document.write would let a
+         crafted custom title break out and run same-origin script */
+      const doc = w.document;
+      doc.open();
+      doc.write("<!doctype html><html><head></head><body></body></html>");
+      doc.close();
+      doc.title = title;
+      const link = doc.createElement("link");
+      link.rel = "icon";
+      link.href = icon;
+      doc.head.appendChild(link);
+      const style = doc.createElement("style");
+      style.textContent =
+        "html,body{margin:0;height:100%;overflow:hidden;background:#000}" +
+        "iframe{border:0;width:100%;height:100%}";
+      doc.head.appendChild(style);
+      const iframe = doc.createElement("iframe");
+      iframe.src = location.href;
+      doc.body.appendChild(iframe);
       toast.success("Launched Memphis in an about:blank window.");
     } catch {
       toast.error("Could not open the about:blank window.");

@@ -32,6 +32,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (action === "register") {
     if (!rateLimit(`auth:reg:${ip}`, 5, 1 / 60))
       return jsonError("Too many attempts. Try again later.", 429);
+    /* the mod "Toggle sign-ups" switch lives in ChatSettings — honour it */
+    const chatSettings = await db.chatSettings.findUnique({ where: { id: "main" } });
+    if (chatSettings && !chatSettings.registrations)
+      return jsonError("Sign-ups are currently disabled by the moderators.", 403);
     let body: { username?: string; password?: string; recoveryCode?: string };
     try {
       body = await req.json();
@@ -50,14 +54,22 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     const existing = await db.user.findUnique({ where: { username } });
     if (existing) return jsonError("Username is already taken");
     const count = await db.user.count();
-    const user = await db.user.create({
-      data: {
-        username,
-        passwordHash: hashPassword(password),
-        role: count === 0 ? "owner" : "member",
-        recoveryHash: recoveryCode ? hashRecoveryCode(recoveryCode) : null,
-      },
-    });
+    let user;
+    try {
+      user = await db.user.create({
+        data: {
+          username,
+          passwordHash: hashPassword(password),
+          role: count === 0 ? "owner" : "member",
+          recoveryHash: recoveryCode ? hashRecoveryCode(recoveryCode) : null,
+        },
+      });
+    } catch (err) {
+      /* concurrent same-username registration: unique constraint */
+      if ((err as { code?: string }).code === "P2002")
+        return jsonError("Username is already taken");
+      throw err;
+    }
     const session = await createSession(user.id);
     return Response.json({
       token: session.token,

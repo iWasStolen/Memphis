@@ -129,10 +129,11 @@ export function LegalModals() {
         desc="Takedown policy"
       >
         <p>
-          Memphis unBLACKed does not host third-party video or music files.
-          The Watch section embeds public-domain films from the Internet
-          Archive and official YouTube players, and the Listen section plays
-          original generative audio synthesized in your browser.
+          Memphis unBLACKed does not host or store third-party games, apps,
+          video or music. The Play section links to and embeds games from
+          third-party sites, the Apps / Listen / Watch sections open the real
+          services through a proxy, and the Browse section is a general-purpose
+          web proxy. No copies are made or distributed by this site.
         </p>
         <p>
           If you believe material accessible through the proxy infringes your
@@ -149,14 +150,13 @@ export function LegalModals() {
       >
         <p>
           Memphis unBLACKed is built with Next.js, React, TypeScript, Tailwind
-          CSS, shadcn/ui, Radix UI, Zustand, Prisma, Socket.IO, Lucide icons
-          and the Z.ai SDK. Music is generated live with the Web Audio API.
-        </p>
-        <p>
-          Embedded open-source games belong to their respective authors and
-          are loaded from their official pages. Films are streamed from the
-          Internet Archive. This project is a fan-made, non-commercial
-          recreation and is not affiliated with the original site.
+          CSS, shadcn/ui, Radix UI, Zustand, Prisma, Socket.IO, Lucide icons,
+          the Z.ai SDK and Mercury Workshop's Scramjet proxy. The built-in
+          arcade games were written for this project; embedded third-party
+          games and apps belong to their respective authors and are loaded
+          from their official pages. This project is a fan-made,
+          non-commercial recreation and is not affiliated with the original
+          site or any linked service.
         </p>
       </LegalDialog>
     </>

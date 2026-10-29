@@ -2,9 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  typescript: {
-    ignoreBuildErrors: true,
-  },
+  /* type errors fail the build — src/ is verified clean, and silently
+     shipping type regressions is worse than a red build */
   reactStrictMode: false,
   /* No global COOP/COEP headers: the Scramjet v2 transports run in the
      page (no SharedWorker → no SharedArrayBuffer requirement), and

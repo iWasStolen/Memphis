@@ -535,6 +535,8 @@ export function SoundboardDialog({
 interface FriendRow {
   id: string;
   status: string;
+  /** server-side direction: who sent the pending request */
+  direction?: "incoming" | "outgoing";
   user: { id: string; username: string; displayName: string | null; status: string } | null;
 }
 
@@ -565,8 +567,12 @@ export function FriendsDialog({
   }, [open, load, refreshKey]);
 
   const friends = rows.filter((r) => r.status === "accepted");
-  const incoming = rows.filter((r) => r.status === "pending" && r.user?.id);
-  const sent = rows.filter((r) => r.status === "pending" && !r.user);
+  const incoming = rows.filter(
+    (r) => r.status === "pending" && r.user?.id && (r.direction ?? "incoming") === "incoming"
+  );
+  const sent = rows.filter(
+    (r) => r.status === "pending" && (r.direction ?? "incoming") === "outgoing"
+  );
 
   const request = async () => {
     const name = addName.trim();
@@ -658,7 +664,17 @@ export function FriendsDialog({
             {sent.map((r) => (
               <div key={r.id} className="flex items-center gap-2 py-1.5">
                 <span className="size-1.5 rounded-full border border-[#555] shrink-0" aria-hidden />
-                <span className="text-[13px] text-[#999] flex-1">pending…</span>
+                <span className="text-[13px] text-[#999] flex-1 truncate">
+                  {r.user ? `${r.user.displayName || r.user.username} · pending…` : "pending…"}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void remove(r.id)}
+                  className="h-7 px-2 text-[#888] hover:text-white"
+                >
+                  Cancel
+                </Button>
               </div>
             ))}
           </section>

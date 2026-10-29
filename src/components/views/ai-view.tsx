@@ -136,6 +136,11 @@ export default function AiView() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /* while a reply is streaming, the `meta` event flips activeId to the
+     (possibly new) conversation id — the history-refetch effect must NOT
+     run then, or it replaces the streamed placeholder with the server's
+     pre-reply history and the visible reply vanishes */
+  const sendingRef = useRef(false);
 
   /* ---------- conversation list ---------- */
   const loadConversations = useCallback(async () => {
@@ -156,6 +161,7 @@ export default function AiView() {
   /* ---------- load messages for active conversation ---------- */
   useEffect(() => {
     if (!activeId) return;
+    if (sendingRef.current) return; /* streaming — keep the live UI */
     const sid = aiSessionId();
     void (async () => {
       const r = await fetch(
@@ -202,6 +208,7 @@ export default function AiView() {
     const userMsg: AIMsg = { id: "local-" + Date.now(), role: "user", content: text };
     const streamMsg: AIMsg = { id: "stream", role: "assistant", content: "", streaming: true };
     setMessages((m) => [...m, userMsg, streamMsg]);
+    sendingRef.current = true;
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -276,11 +283,15 @@ export default function AiView() {
       if (msg !== "The user aborted a request." && !msg.toLowerCase().includes("abort")) {
         setError(msg);
       }
-      setMessages((m) => m.filter((x) => x.id !== "stream" || x.content));
       setMessages((m) =>
-        m.map((x) => (x.id === "stream" ? { ...x, streaming: false } : x))
+        m
+          /* rename any orphaned stream placeholder so the next send
+             can't produce a duplicate React key */
+          .map((x) => (x.id === "stream" ? { ...x, id: "aborted-" + Date.now(), streaming: false } : x))
+          .filter((x) => x.role === "user" || x.content)
       );
     } finally {
+      sendingRef.current = false;
       setSending(false);
       abortRef.current = null;
     }
@@ -292,23 +303,35 @@ export default function AiView() {
       return;
     }
     setSavingInstructions(true);
-    await fetch(
-      `/api/ai/conversations/${activeId}?sessionId=${encodeURIComponent(aiSessionId())}`,
-      {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ instructions: instructionsDraft }),
+    try {
+      const r = await fetch(
+        `/api/ai/conversations/${activeId}?sessionId=${encodeURIComponent(aiSessionId())}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ instructions: instructionsDraft }),
+        }
+      );
+      if (!r.ok) {
+        const data = (await r.json().catch(() => ({}))) as { error?: string };
+        setError(data.error || "Could not save instructions.");
+        return;
       }
-    );
-    setInstructions(instructionsDraft);
-    setSavingInstructions(false);
+      setInstructions(instructionsDraft);
+    } catch {
+      setError("Could not save instructions — check your connection.");
+    } finally {
+      setSavingInstructions(false);
+    }
   };
 
   const deleteConversation = async (id: string) => {
-    await fetch(
-      `/api/ai/conversations/${id}?sessionId=${encodeURIComponent(aiSessionId())}`,
-      { method: "DELETE" }
-    );
+    try {
+      await fetch(
+        `/api/ai/conversations/${id}?sessionId=${encodeURIComponent(aiSessionId())}`,
+        { method: "DELETE" }
+      );
+    } catch { /* offline — keep the row; next reload re-syncs */ }
     if (activeId === id) newChat();
     void loadConversations();
   };
@@ -321,22 +344,27 @@ export default function AiView() {
     }
     setGenCards(true);
     setError("");
-    const r = await fetch("/api/ai/flashcards", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId: aiSessionId(), conversationId: activeId }),
-    });
-    setGenCards(false);
-    const data = (await r.json().catch(() => ({}))) as { cards?: Flashcard[]; error?: string };
-    if (r.ok && data.cards?.length) {
-      const next = [...data.cards, ...cards].slice(0, 120);
-      setCards(next);
-      lsSet(FLASHCARD_KEY, next);
-      setCardIdx(0);
-      setCardFlipped(false);
-      setShowCards(true);
-    } else {
-      setError(data.error || "Could not build flashcards — try again.");
+    try {
+      const r = await fetch("/api/ai/flashcards", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId: aiSessionId(), conversationId: activeId }),
+      });
+      const data = (await r.json().catch(() => ({}))) as { cards?: Flashcard[]; error?: string };
+      if (r.ok && data.cards?.length) {
+        const next = [...data.cards, ...cards].slice(0, 120);
+        setCards(next);
+        lsSet(FLASHCARD_KEY, next);
+        setCardIdx(0);
+        setCardFlipped(false);
+        setShowCards(true);
+      } else {
+        setError(data.error || "Could not build flashcards — try again.");
+      }
+    } catch {
+      setError("Could not build flashcards — check your connection.");
+    } finally {
+      setGenCards(false);
     }
   };
 

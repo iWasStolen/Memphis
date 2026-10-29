@@ -40,7 +40,7 @@ const BUILTIN_SCORES: Record<string, { hasScore: true; scoreLabel: string }> = {
   "2048": { hasScore: true, scoreLabel: "points" },
   snake: { hasScore: true, scoreLabel: "apples" },
   tetris: { hasScore: true, scoreLabel: "points" },
-  minesweeper: { hasScore: true, scoreLabel: "seconds (lower is better)" },
+  minesweeper: { hasScore: true, scoreLabel: "points" },
   breakout: { hasScore: true, scoreLabel: "points" },
   flappy: { hasScore: true, scoreLabel: "pipes" },
   pong: { hasScore: true, scoreLabel: "rally wins" },
@@ -132,11 +132,20 @@ export async function GET(req: Request) {
     .filter((c) => c.count > 0)
     .sort((a, b) => b.count - a.count);
 
-  /* resolve by ids (favorites / recently played) */
+  /* resolve by ids (favorites / recently played) — search + sort still apply */
   if (ids) {
     const wanted = ids.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 200);
     const byId = new Map(games.map((g) => [g.id, g]));
-    const resolved = wanted.map((id) => byId.get(id)).filter(Boolean) as GameDef[];
+    let resolved = wanted.map((id) => byId.get(id)).filter(Boolean) as GameDef[];
+    if (q) {
+      const terms = q.split(/\s+/).filter(Boolean);
+      resolved = resolved.filter((g) => {
+        const hay = `${g.name} ${g.desc} ${(g.tags || []).join(" ")}`.toLowerCase();
+        return terms.every((t) => hay.includes(t));
+      });
+    }
+    if (sort === "az") resolved = [...resolved].sort((a, b) => a.name.localeCompare(b.name));
+    else if (sort === "za") resolved = [...resolved].sort((a, b) => b.name.localeCompare(a.name));
     return Response.json({
       ok: true,
       total: resolved.length,

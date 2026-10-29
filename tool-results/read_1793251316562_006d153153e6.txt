@@ -1,0 +1,1069 @@
+     1→/* ============================================================
+     2→   Memphis chat service — Socket.io + bun:sqlite on shared DB
+     3→   Port 3003. Validates sessions against the main app's tables.
+     4→   ============================================================ */
+     5→
+     6→import { createServer } from "http";
+     7→import { Database } from "bun:sqlite";
+     8→import { Server, Socket } from "socket.io";
+     9→
+    10→const PORT = 3003;
+    11→const DB_PATH = "/home/z/my-project/db/custom.db";
+    12→
+    13→const db = new Database(DB_PATH, { create: true });
+    14→db.exec("PRAGMA journal_mode=WAL;");
+    15→db.exec("PRAGMA busy_timeout=15000;");
+    16→
+    17→/* ---------------- schema guard (tables are owned by Prisma push) ---------------- */
+    18→
+    19→db.exec(`INSERT OR IGNORE INTO ChatSettings (id) VALUES ('main')`);
+    20→
+    21→const SEED_CHANNELS: [string, string, string][] = [
+    22→  ["announcements", "Official announcements — read only", "text"],
+    23→  ["rules", "Community rules — read before chatting", "text"],
+    24→  ["general", "General discussion", "text"],
+    25→  ["counting", "Count up by one, don't break the chain", "counting"],
+    26→  ["casino", "Try /flip 50 heads or /slots 25", "casino"],
+    27→  ["suggestions", "Ideas for games, apps and features", "text"],
+    28→  ["share-links", "Share interesting (school-safe) links", "text"],
+    29→  ["media", "Images and GIFs (https links only)", "text"],
+    30→];
+    31→for (const [name, topic, kind] of SEED_CHANNELS) {
+    32→  db.run(
+    33→    `INSERT OR IGNORE INTO Channel (id, name, topic, kind, isPrivate, locked, createdAt) VALUES (?, ?, ?, ?, 0, ?, ?)`,
+    34→    [cuidish(), name, topic, kind, name === "announcements" || name === "rules" ? 1 : 0, Date.now()]
+    35→  );
+    36→}
+    37→
+    38→function cuidish() {
+    39→  return "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 12).padEnd(17, "0");
+    40→}
+    41→
+    42→const SYSTEM_USER_ID = "memphis-system-user-000000";
+    43→
+    44→db.run(
+    45→  `INSERT OR IGNORE INTO User (id, username, passwordHash, role, bio, status, createdAt, updatedAt)
+    46→   VALUES (?, 'system', 'x:y', 'owner', 'Memphis system', '', ?, ?)`,
+    47→  [SYSTEM_USER_ID, Date.now(), Date.now()]
+    48→);
+    49→
+    50→/* ---------------- types ---------------- */
+    51→
+    52→interface UserRow {
+    53→  id: string; username: string; passwordHash: string; role: string;
+    54→  displayName: string | null; bio: string; status: string; avatarUrl: string | null;
+    55→  xp: number; coins: number; streak: number; lastClaimAt: number | null;
+    56→  mutedUntil: number | null; banned: number; banReason: string | null;
+    57→  dmPolicy: string; recoveryHash: string | null; createdAt: number; updatedAt: number;
+    58→}
+    59→
+    60→interface ChatSettingsRow {
+    61→  id: string; wordFilter: string; automodEnabled: number; floodMsgs: number;
+    62→  floodSecs: number; sameMsgLimit: number; severeMuteSec: number;
+    63→  slowmodeSec: number; registrations: number; soundboard: number;
+    64→}
+    65→
+    66→const settings = () =>
+    67→  db.query<ChatSettingsRow, []>("SELECT * FROM ChatSettings WHERE id='main'").get()!;
+    68→
+    69→function updateSettings(patch: Partial<ChatSettingsRow>) {
+    70→  const keys = Object.keys(patch);
+    71→  if (!keys.length) return;
+    72→  db.run(
+    73→    `UPDATE ChatSettings SET ${keys.map((k) => `${k}=?`).join(", ")} WHERE id='main'`,
+    74→    keys.map((k) => (patch as Record<string, unknown>)[k])
+    75→  );
+    76→}
+    77→
+    78→/* ---------------- helpers ---------------- */
+    79→
+    80→const SEVERE = ["nigger", "nigga", "faggot", "kike"]; /* auto-mute trigger list (minimal) */
+    81→
+    82→function normalize(t: string) {
+    83→  return t.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, "").replace(/\s+/g, " ");
+    84→}
+    85→
+    86→function filterMessage(text: string): { text: string; severe: boolean } {
+    87→  const cfg = settings();
+    88→  const words = cfg.wordFilter
+    89→    .split(",")
+    90→    .map((w) => w.trim().toLowerCase())
+    91→    .filter(Boolean);
+    92→  let out = text;
+    93→  for (const w of words) {
+    94→    const re = new RegExp(
+    95→      w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    96→      "gi"
+    97→    );
+    98→    out = out.replace(re, "•".repeat(Math.max(3, w.length)));
+    99→  }
+   100→  const norm = normalize(text);
+   101→  const severe = SEVERE.some((w) => norm.includes(w));
+   102→  return { text: out, severe };
+   103→}
+   104→
+   105→function isStaff(u: UserRow) {
+   106→  return ["owner", "admin", "mod"].includes(u.role);
+   107→}
+   108→
+   109→function muted(u: UserRow) {
+   110→  return u.mutedUntil && u.mutedUntil > Date.now();
+   111→}
+   112→
+   113→function publicUser(u: UserRow) {
+   114→  return {
+   115→    id: u.id,
+   116→    username: u.username,
+   117→    displayName: u.displayName,
+   118→    avatarUrl: u.avatarUrl,
+   119→    status: u.status,
+   120→    role: u.role,
+   121→    bio: u.bio,
+   122→    xp: u.xp,
+   123→    coins: u.coins,
+   124→    streak: u.streak,
+   125→  };
+   126→}
+   127→
+   128→function getUserByToken(token: string): UserRow | null {
+   129→  const row = db
+   130→    .query<UserRow, [string, number]>(
+   131→      `SELECT u.* FROM Session s JOIN User u ON s.userId = u.id
+   132→       WHERE s.token = ? AND s.expiresAt > ? AND u.banned = 0`
+   133→    )
+   134→    .get(token, Date.now());
+   135→  return row ?? null;
+   136→}
+   137→
+   138→function getUserByUsername(username: string): UserRow | null {
+   139→  return db.query<UserRow, [string]>("SELECT * FROM User WHERE username = ?").get(
+   140→    String(username ?? "").trim()
+   141→  ) ?? null;
+   142→}
+   143→
+   144→function dmKeyFor(a: string, b: string) {
+   145→  return "u:" + [a, b].sort().join(":");
+   146→}
+   147→
+   148→function msgRow(m: unknown) {
+   149→  const r = m as Record<string, unknown>;
+   150→  return {
+   151→    id: r.id as string,
+   152→    channelId: (r.channelId as string) ?? null,
+   153→    dmKey: (r.dmKey as string) ?? null,
+   154→    userId: r.userId as string,
+   155→    username: r.username as string,
+   156→    displayName: r.displayName as string | null,
+   157→    avatarUrl: r.avatarUrl as string | null,
+   158→    role: r.role as string,
+   159→    content: r.content as string,
+   160→    isSystem: !!r.isSystem,
+   161→    poll: r.poll ? JSON.parse(r.poll as string) : null,
+   162→    deleted: !!r.deleted,
+   163→    createdAt: Number(r.createdAt),
+   164→  };
+   165→}
+   166→
+   167→function fetchMessages(where: string, arg: unknown, limit = 60, before?: number) {
+   168→  const conds = [where, before ? "createdAt < ?" : ""].filter(Boolean).join(" AND ");
+   169→  const args = [arg, ...(before ? [before] : [])];
+   170→  const rows = db
+   171→    .query(
+   172→      `SELECT m.*, u.username, u.displayName, u.avatarUrl, u.role FROM Message m
+   173→       JOIN User u ON m.userId = u.id
+   174→       WHERE ${conds} AND m.deleted = 0
+   175→       ORDER BY m.createdAt DESC LIMIT ?`
+   176→    )
+   177→    .all(...args, limit);
+   178→  return rows.reverse().map(msgRow);
+   179→}
+   180→
+   181→/* ---------------- presence + rooms ---------------- */
+   182→
+   183→interface OnlineUser {
+   184→  socketId: string;
+   185→  user: UserRow;
+   186→}
+   187→
+   188→const online = new Map<string, OnlineUser>(); // socketId -> user
+   189→const usernameToSockets = new Map<string, Set<string>>();
+   190→
+   191→function onlineList() {
+   192→  const seen = new Map<string, { user: ReturnType<typeof publicUser>; sockets: number }>();
+   193→  for (const { user } of online.values()) {
+   194→    const cur = seen.get(user.id);
+   195→    if (cur) cur.sockets++;
+   196→    else seen.set(user.id, { user: publicUser(user), sockets: 1 });
+   197→  }
+   198→  return [...seen.values()].map((s) => ({ ...s.user, online: true }));
+   199→}
+   200→
+   201→function broadcastPresence(io: Server) {
+   202→  io.emit("presence:list", onlineList());
+   203→}
+   204→
+   205→/* ---------------- flood tracking ---------------- */
+   206→
+   207→const msgTimes = new Map<string, number[]>();
+   208→const lastMessages = new Map<string, string[]>();
+   209→
+   210→function floodCheck(u: UserRow): string | null {
+   211→  const cfg = settings();
+   212→  if (!cfg.automodEnabled) return null;
+   213→  const now = Date.now();
+   214→  const arr = (msgTimes.get(u.id) ?? []).filter((t) => now - t < cfg.floodSecs * 1000);
+   215→  arr.push(now);
+   216→  msgTimes.set(u.id, arr);
+   217→  if (arr.length > cfg.floodMsgs)
+   218→    return `flood (${arr.length} messages in ${cfg.floodSecs}s)`;
+   219→  return null;
+   220→}
+   221→
+   222→function repeatCheck(u: UserRow, content: string): string | null {
+   223→  const cfg = settings();
+   224→  if (!cfg.automodEnabled || cfg.sameMsgLimit <= 0) return null;
+   225→  const arr = (lastMessages.get(u.id) ?? []).slice(-(cfg.sameMsgLimit - 1));
+   226→  arr.push(content);
+   227→  lastMessages.set(u.id, arr);
+   228→  if (arr.filter((m) => m === content).length >= cfg.sameMsgLimit)
+   229→    return `repeated messages`;
+   230→  return null;
+   231→}
+   232→
+   233→/* ---------------- message sending ---------------- */
+   234→
+   235→interface SendPayload {
+   236→  channelId?: string;
+   237→  dmKey?: string;
+   238→  content: string;
+   239→}
+   240→
+   241→function canAccessChannel(u: UserRow, channel: { id: string; isPrivate: number }) {
+   242→  if (!channel.isPrivate) return true;
+   243→  return !!db
+   244→    .query("SELECT id FROM GroupMember WHERE groupId = ? AND userId = ?")
+   245→    .get(channel.id, u.id);
+   246→}
+   247→
+   248→function insertMessage(
+   249→  userId: string,
+   250→  content: string,
+   251→  opts: { channelId?: string; dmKey?: string; isSystem?: boolean; poll?: unknown } = {}
+   252→) {
+   253→  const id = cuidish();
+   254→  db.run(
+   255→    `INSERT INTO Message (id, channelId, dmKey, userId, content, isSystem, poll, deleted, createdAt)
+   256→     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+   257→    [
+   258→      id,
+   259→      opts.channelId ?? null,
+   260→      opts.dmKey ?? null,
+   261→      userId,
+   262→      content,
+   263→      opts.isSystem ? 1 : 0,
+   264→      opts.poll ? JSON.stringify(opts.poll) : null,
+   265→      Date.now(),
+   266→    ]
+   267→  );
+   268→  return id;
+   269→}
+   270→
+   271→function messageWithJoins(id: string) {
+   272→  const row = db
+   273→    .query(
+   274→      `SELECT m.*, u.username, u.displayName, u.avatarUrl, u.role FROM Message m
+   275→       JOIN User u ON m.userId = u.id WHERE m.id = ?`
+   276→    )
+   277→    .get(id);
+   278→  return row ? msgRow(row) : null;
+   279→}
+   280→
+   281→/* casino */
+   282→const SLOTS = ["◆", "●", "▲", "■", "★"];
+   283→function slotsSpin() {
+   284→  return [0, 1, 2].map(() => SLOTS[Math.floor(Math.random() * SLOTS.length)]);
+   285→}
+   286→
+   287→function addCoins(userId: string, delta: number) {
+   288→  db.run("UPDATE User SET coins = MAX(0, coins + ?) WHERE id = ?", [delta, userId]);
+   289→}
+   290→
+   291→function addXp(userId: string, delta: number) {
+   292→  db.run("UPDATE User SET xp = MAX(0, xp + ?) WHERE id = ?", [delta, userId]);
+   293→}
+   294→
+   295→function emitUserUpdate(io: Server, userId: string) {
+   296→  const u = db.query<UserRow, [string]>("SELECT * FROM User WHERE id = ?").get(userId);
+   297→  if (!u) return;
+   298→  for (const [sid, o] of online) if (o.user.id === userId) io.to(sid).emit("user:update", publicUser(u));
+   299→}
+   300→
+   301→/* ---------------- socket server ---------------- */
+   302→
+   303→const httpServer = createServer();
+   304→const io = new Server(httpServer, {
+   305→  path: "/",
+   306→  cors: { origin: "*", methods: ["GET", "POST"] },
+   307→  pingTimeout: 60000,
+   308→  pingInterval: 25000,
+   309→  maxHttpBufferSize: 1e6,
+   310→});
+   311→
+   312→io.on("connection", (socket: Socket) => {
+   313→  let user: UserRow | null = null;
+   314→  try {
+   315→    const token = (socket.handshake.auth?.token as string) || "";
+   316→    user = token ? getUserByToken(token) : null;
+   317→  } catch {
+   318→    user = null;
+   319→  }
+   320→  if (!user) {
+   321→    socket.emit("auth:error", "Invalid or expired session");
+   322→    socket.disconnect(true);
+   323→    return;
+   324→  }
+   325→
+   326→  const freshUser = () => {
+   327→    const u = db.query<UserRow, [string]>("SELECT * FROM User WHERE id = ?").get(user!.id);
+   328→    return u ?? user!;
+   329→  };
+   330→  user = freshUser();
+   331→
+   332→  online.set(socket.id, { socketId: socket.id, user });
+   333→  if (!usernameToSockets.has(user.username)) usernameToSockets.set(user.username, new Set());
+   334→  usernameToSockets.get(user.username)!.add(socket.id);
+   335→  socket.emit("auth:ok", publicUser(user));
+   336→  broadcastPresence(io);
+   337→
+   338→  /* ---- channels ---- */
+   339→  socket.on("channels:list", (cb) => {
+   340→    const staff = isStaff(user!);
+   341→    const rows = db
+   342→      .query(
+   343→        `SELECT c.* FROM Channel c
+   344→         WHERE (c.isPrivate = 0 AND c.name != 'staff-only' AND c.name != 'logs' OR (? = 1 AND c.name IN ('staff-only','logs')))
+   345→         OR (c.isPrivate = 1 AND EXISTS (SELECT 1 FROM GroupMember gm WHERE gm.groupId = c.id AND gm.userId = ?))
+   346→         ORDER BY c.createdAt ASC`
+   347→      )
+   348→      .all(staff ? 1 : 0, user!.id) as Record<string, unknown>[];
+   349→    cb(
+   350→      rows.map((r) => ({
+   351→        id: r.id as string,
+   352→        name: r.name as string,
+   353→        topic: r.topic as string,
+   354→        kind: r.kind as string,
+   355→        isPrivate: !!r.isPrivate,
+   356→        locked: !!r.locked,
+   357→      }))
+   358→    );
+   359→  });
+   360→
+   361→  socket.on("chat:join", (channelId: string, cb) => {
+   362→    const ch = db.query("SELECT * FROM Channel WHERE id = ?").get(channelId) as
+   363→      | { id: string; name: string; isPrivate: number }
+   364→      | undefined;
+   365→    if (!ch) return cb?.({ error: "Channel not found" });
+   366→    if (!canAccessChannel(user!, ch)) return cb?.({ error: "No access to this channel" });
+   367→    socket.join("ch:" + channelId);
+   368→    const messages = fetchMessages("m.channelId = ?", channelId);
+   369→    const counting = db
+   370→      .query(
+   371→        `SELECT m.content FROM Message m WHERE m.channelId = ? AND m.isSystem = 0 AND m.deleted = 0
+   372→         ORDER BY m.createdAt DESC LIMIT 1`
+   373→      )
+   374→      .get(channelId) as { content: string } | undefined;
+   375→    cb?.({
+   376→      messages,
+   377→      lastCount: counting ? parseInt(counting.content, 10) || 0 : 0,
+   378→    });
+   379→  });
+   380→
+   381→  socket.on("chat:leave", (channelId: string) => {
+   382→    socket.leave("ch:" + channelId);
+   383→  });
+   384→
+   385→  socket.on("chat:typing", (channelId: string) => {
+   386→    socket.to("ch:" + channelId).emit("chat:typing", {
+   387→      username: user!.displayName || user!.username,
+   388→    });
+   389→  });
+   390→
+   391→  /* ---- send message (channel or DM) ---- */
+   392→  socket.on("chat:send", (p: SendPayload, cb) => {
+   393→    const u = freshUser();
+   394→    const content = (p?.content ?? "").toString().slice(0, 600).trim();
+   395→    if (!content) return cb?.({ error: "Empty message" });
+   396→    if (muted(u))
+   397→      return cb?.({ error: `You are muted until ${new Date(u.mutedUntil!).toLocaleTimeString()}` });
+   398→
+   399→    /* casino commands */
+   400→    if (p.channelId) {
+   401→      const ch = db.query("SELECT * FROM Channel WHERE id = ?").get(p.channelId) as
+   402→        | { id: string; name: string; kind: string; locked: number; isPrivate: number }
+   403→        | undefined;
+   404→      if (!ch) return cb?.({ error: "Channel not found" });
+   405→      if (!canAccessChannel(u, ch)) return cb?.({ error: "No access" });
+   406→      if (ch.locked && !isStaff(u)) return cb?.({ error: "Channel is locked" });
+   407→
+   408→      if (ch.kind === "casino" && content.startsWith("/")) {
+   409→        return handleCasino(socket, io, u, ch, content, cb);
+   410→      }
+   411→      if (ch.kind === "counting") {
+   412→        return handleCounting(socket, io, u, ch, content, cb);
+   413→      }
+   414→
+   415→      /* slowmode */
+   416→      const cfg = settings();
+   417→      if (cfg.slowmodeSec > 0 && !isStaff(u)) {
+   418→        const last = db
+   419→          .query("SELECT createdAt FROM Message WHERE userId = ? AND channelId = ? AND isSystem = 0 ORDER BY createdAt DESC LIMIT 1")
+   420→          .get(u.id, ch.id) as { createdAt: number } | undefined;
+   421→        if (last && Date.now() - Number(last.createdAt) < cfg.slowmodeSec * 1000)
+   422→          return cb?.({ error: `Slowmode: wait ${cfg.slowmodeSec}s between messages` });
+   423→      }
+   424→    }
+   425→
+   426→    /* automod */
+   427→    const flood = floodCheck(u);
+   428→    if (flood) {
+   429→      const secs = 60;
+   430→      db.run("UPDATE User SET mutedUntil = ? WHERE id = ?", [Date.now() + secs * 1000, u.id]);
+   431→      logMod(io, null, u.username, "auto-mute", `${flood}`);
+   432→      return cb?.({ error: `Auto-mute: ${flood}. Muted for 60s.` });
+   433→    }
+   434→    const repeat = repeatCheck(u, content);
+   435→    if (repeat) {
+   436→      return cb?.({ error: "You already sent that message." });
+   437→    }
+   438→    const { text, severe } = filterMessage(content);
+   439→    if (severe) {
+   440→      const cfg = settings();
+   441→      const secs = cfg.severeMuteSec || 600;
+   442→      db.run("UPDATE User SET mutedUntil = ? WHERE id = ?", [Date.now() + secs * 1000, u.id]);
+   443→      logMod(io, null, u.username, "auto-mute (severe)", "severe language");
+   444→      return cb?.({ error: `Auto-mute: severe language. Muted for ${secs}s.` });
+   445→    }
+   446→
+   447→    const id = insertMessage(u.id, text, { channelId: p.channelId, dmKey: p.dmKey });
+   448→    const msg = messageWithJoins(id);
+   449→
+   450→    /* reward */
+   451→    const today = new Date();
+   452→    const dayKey = `${today.getFullYear()}-${today.getMonth()}-${today.getDate()}`;
+   453→    const coinKey = `coins:${u.id}:${dayKey}`;
+   454→    const count = ((globalThis as Record<string, unknown>)[coinKey] as number) ?? 0;
+   455→    if (count < 50) {
+   456→      addCoins(u.id, 1);
+   457→      (globalThis as Record<string, unknown>)[coinKey] = count + 1;
+   458→    }
+   459→    addXp(u.id, 2);
+   460→    emitUserUpdate(io, u.id);
+   461→
+   462→    if (p.channelId) io.to("ch:" + p.channelId).emit("chat:message", msg);
+   463→    if (p.dmKey) {
+   464→      const parts = p.dmKey.replace("u:", "").split(":");
+   465→      io.to("dm:" + p.dmKey).emit("chat:message", msg);
+   466→      for (const uid of parts) {
+   467→        for (const [sid, o] of online) if (o.user.id === uid) io.to(sid).emit("dm:refresh", p.dmKey);
+   468→      }
+   469→    }
+   470→    cb?.({ ok: true, message: msg });
+   471→  });
+   472→
+   473→  socket.on("chat:loadmore", (p: { channelId?: string; dmKey?: string; before: number }, cb) => {
+   474→    if (p.channelId) {
+   475→      cb?.(fetchMessages("m.channelId = ?", p.channelId, 60, p.before));
+   476→    } else if (p.dmKey) {
+   477→      cb?.(fetchMessages("m.dmKey = ?", p.dmKey, 60, p.before));
+   478→    }
+   479→  });
+   480→
+   481→  socket.on("message:delete", (id: string, cb) => {
+   482→    const m = db.query("SELECT * FROM Message WHERE id = ?").get(id) as
+   483→      | { id: string; userId: string; channelId: string | null; dmKey: string | null }
+   484→      | undefined;
+   485→    if (!m) return cb?.({ error: "Not found" });
+   486→    const u = freshUser();
+   487→    if (m.userId !== u.id && !isStaff(u)) return cb?.({ error: "Not allowed" });
+   488→    db.run("UPDATE Message SET deleted = 1 WHERE id = ?", [id]);
+   489→    if (m.channelId) io.to("ch:" + m.channelId).emit("chat:deleted", id);
+   490→    if (m.dmKey) io.to("dm:" + m.dmKey).emit("chat:deleted", id);
+   491→    cb?.({ ok: true });
+   492→  });
+   493→
+   494→  /* ---- DMs ---- */
+   495→  socket.on("dm:open", (username: string, cb) => {
+   496→    const target = getUserByUsername(String(username || "").trim());
+   497→    if (!target) return cb?.({ error: "User not found" });
+   498→    const u = freshUser();
+   499→    if (target.id === u.id) return cb?.({ error: "That's you" });
+   500→    if (target.dmPolicy === "off") return cb?.({ error: "This user does not accept DMs" });
+   501→    if (
+   502→      target.dmPolicy === "friends" &&
+   503→      !db
+   504→        .query(
+   505→          `SELECT id FROM Friendship WHERE status='accepted' AND ((initiatorId=? AND receiverId=?) OR (initiatorId=? AND receiverId=?))`
+   506→        )
+   507→        .get(u.id, target.id, target.id, u.id)
+   508→    )
+   509→      return cb?.({ error: "This user only accepts DMs from friends" });
+   510→    const key = dmKeyFor(u.id, target.id);
+   511→    socket.join("dm:" + key);
+   512→    const messages = fetchMessages("m.dmKey = ?", key);
+   513→    cb?.({
+   514→      key,
+   515→      target: publicUser(target),
+   516→      messages,
+   517→    });
+   518→  });
+   519→
+   520→  socket.on("dm:join", (key: string) => {
+   521→    socket.join("dm:" + key);
+   522→  });
+   523→
+   524→  /* ---- groups ---- */
+   525→  socket.on("group:create", (p: { name: string; usernames: string[] }, cb) => {
+   526→    const u = freshUser();
+   527→    const name = String(p?.name ?? "").slice(0, 40).trim() || "Group";
+   528→    const members = [u.id];
+   529→    const groupIds: string[] = [];
+   530→    for (const un of (p?.usernames ?? []).slice(0, 19)) {
+   531→      const t = getUserByUsername(String(un).trim());
+   532→      if (t && !members.includes(t.id)) {
+   533→        members.push(t.id);
+   534→        groupIds.push(t.id);
+   535→      }
+   536→    }
+   537→    const gid = cuidish();
+   538→    db.run("INSERT INTO \"Group\" (id, name, createdBy, createdAt) VALUES (?, ?, ?, ?)", [
+   539→      gid, name, u.id, Date.now(),
+   540→    ]);
+   541→    for (const m of members)
+   542→      db.run('INSERT OR IGNORE INTO GroupMember (id, groupId, userId) VALUES (?, ?, ?)', [cuidish(), gid, m]);
+   543→    const info = { id: gid, name, memberIds: members };
+   544→    io.to("dm:g:" + gid).emit("group:new", info);
+   545→    cb?.({ ok: true, group: info });
+   546→  });
+   547→
+   548→  socket.on("group:list", (cb) => {
+   549→    const rows = db
+   550→      .query(
+   551→        `SELECT g.id, g.name FROM \"Group\" g
+   552→         JOIN GroupMember gm ON gm.groupId = g.id
+   553→         WHERE gm.userId = ? AND g.id NOT IN (SELECT id FROM Channel)`
+   554→      )
+   555→      .all(user!.id);
+   556→    const groups = rows.map((r) => {
+   557→      const memberIds = db
+   558→        .query("SELECT userId FROM GroupMember WHERE groupId = ?")
+   559→        .all(r.id)
+   560→        .map((m) => (m as { userId: string }).userId);
+   561→      return { ...r, memberIds };
+   562→    });
+   563→    cb?.(groups);
+   564→  });
+   565→
+   566→  socket.on("group:open", (gid: string, cb) => {
+   567→    const isMember = db
+   568→      .query("SELECT id FROM GroupMember WHERE groupId = ? AND userId = ?")
+   569→      .get(gid, user!.id);
+   570→    if (!isMember) return cb?.({ error: "Not a member" });
+   571→    const memberRows = db
+   572→      .query(
+   573→        `SELECT u.id, u.username, u.displayName, u.avatarUrl, u.status, u.role FROM GroupMember gm
+   574→         JOIN User u ON gm.userId = u.id WHERE gm.groupId = ?`
+   575→      )
+   576→      .all(gid);
+   577→    socket.join("dm:g:" + gid);
+   578→    cb?.({
+   579→      key: "g:" + gid,
+   580→      members: memberRows,
+   581→      messages: fetchMessages("m.dmKey = ?", "g:" + gid),
+   582→    });
+   583→  });
+   584→
+   585→  socket.on("group:invite", (p: { groupId: string; username: string }, cb) => {
+   586→    const t = getUserByUsername(String(p?.username ?? "").trim());
+   587→    if (!t) return cb?.({ error: "User not found" });
+   588→    db.run('INSERT OR IGNORE INTO GroupMember (id, groupId, userId) VALUES (?, ?, ?)', [
+   589→      cuidish(), p.groupId, t.id,
+   590→    ]);
+   591→    for (const [sid, o] of online) if (o.user.id === t.id) io.to(sid).emit("group:invited", p.groupId);
+   592→    cb?.({ ok: true });
+   593→  });
+   594→
+   595→  /* ---- friends ---- */
+   596→  socket.on("friends:list", (cb) => {
+   597→    const rows = db
+   598→      .query(
+   599→        `SELECT f.*, 
+   600→                CASE WHEN f.initiatorId = ? THEN f.receiverId ELSE f.initiatorId END AS otherId
+   601→         FROM Friendship f WHERE f.initiatorId = ? OR f.receiverId = ?`
+   602→      )
+   603→      .all(user!.id, user!.id, user!.id);
+   604→    const out = rows.map((r) => {
+   605→      const o = db
+   606→        .query("SELECT id, username, displayName, avatarUrl, status, role FROM User WHERE id = ?")
+   607→        .get((r as { otherId: string }).otherId);
+   608→      return { id: (r as { id: string }).id, status: (r as { status: string }).status, user: o };
+   609→    });
+   610→    cb?.(out);
+   611→  });
+   612→
+   613→  socket.on("friends:request", (username: string, cb) => {
+   614→    const t = getUserByUsername(String(username ?? "").trim());
+   615→    if (!t) return cb?.({ error: "User not found" });
+   616→    if (t.id === user!.id) return cb?.({ error: "That's you" });
+   617→    const existing = db
+   618→      .query(
+   619→        `SELECT * FROM Friendship WHERE (initiatorId=? AND receiverId=?) OR (initiatorId=? AND receiverId=?)`
+   620→      )
+   621→      .get(user!.id, t.id, t.id, user!.id);
+   622→    if (existing) return cb?.({ error: "Request already exists or you are friends" });
+   623→    db.run("INSERT INTO Friendship (id, initiatorId, receiverId, status, createdAt) VALUES (?, ?, ?, 'pending', ?)", [
+   624→      cuidish(), user!.id, t.id, Date.now(),
+   625→    ]);
+   626→    for (const [sid, o] of online) if (o.user.id === t.id) io.to(sid).emit("friends:incoming", publicUser(user!));
+   627→    cb?.({ ok: true });
+   628→  });
+   629→
+   630→  socket.on("friends:respond", (p: { id: string; accept: boolean }, cb) => {
+   631→    const f = db.query("SELECT * FROM Friendship WHERE id = ?").get(p.id) as
+   632→      | { id: string; receiverId: string; initiatorId: string }
+   633→      | undefined;
+   634→    if (!f || f.receiverId !== user!.id) return cb?.({ error: "Not found" });
+   635→    if (p.accept) db.run("UPDATE Friendship SET status='accepted' WHERE id = ?", [p.id]);
+   636→    else db.run("DELETE FROM Friendship WHERE id = ?", [p.id]);
+   637→    cb?.({ ok: true });
+   638→  });
+   639→
+   640→  socket.on("friends:remove", (id: string, cb) => {
+   641→    db.run("DELETE FROM Friendship WHERE id = ? AND (initiatorId = ? OR receiverId = ?)", [
+   642→      id, user!.id, user!.id,
+   643→    ]);
+   644→    cb?.({ ok: true });
+   645→  });
+   646→
+   647→  socket.on("users:query", (q: string, cb) => {
+   648→    const term = String(q ?? "").trim().toLowerCase();
+   649→    if (term.length < 2) return cb?.([]);
+   650→    const rows = db
+   651→      .query(
+   652→        `SELECT id, username, displayName, avatarUrl, status, role FROM User
+   653→         WHERE (LOWER(username) LIKE ? OR LOWER(COALESCE(displayName,'')) LIKE ?) AND banned = 0
+   654→         LIMIT 10`
+   655→      )
+   656→      .all(`%${term}%`, `%${term}%`);
+   657→    cb?.(rows);
+   658→  });
+   659→
+   660→  /* ---- profile ---- */
+   661→  socket.on("profile:get", (username: string, cb) => {
+   662→    const t = getUserByUsername(String(username ?? "").trim());
+   663→    if (!t) return cb?.({ error: "User not found" });
+   664→    const msgCount = db
+   665→      .query("SELECT COUNT(*) as c FROM Message WHERE userId = ? AND deleted = 0")
+   666→      .get(t.id) as { c: number };
+   667→    cb?.({ user: publicUser(t), messages: msgCount.c });
+   668→  });
+   669→
+   670→  /* ---- polls ---- */
+   671→  socket.on("poll:create", (p: { channelId: string; question: string; options: string[]; minutes: number }, cb) => {
+   672→    const q = String(p?.question ?? "").slice(0, 140).trim();
+   673→    const options = (p?.options ?? []).map((o) => String(o).slice(0, 60).trim()).filter(Boolean).slice(0, 4);
+   674→    if (!q || options.length < 2) return cb?.({ error: "Need a question and at least 2 options" });
+   675→    const endsAt = Date.now() + Math.min(1440, Math.max(1, p?.minutes ?? 15)) * 60000;
+   676→    const poll = { question: q, options: options.map((text) => ({ text, voters: [] })), endsAt };
+   677→    const id = insertMessage(user!.id, q, { channelId: p.channelId, poll });
+   678→    const msg = messageWithJoins(id);
+   679→    io.to("ch:" + p.channelId).emit("chat:message", msg);
+   680→    cb?.({ ok: true });
+   681→  });
+   682→
+   683→  socket.on("poll:vote", (p: { messageId: string; optionIndex: number }, cb) => {
+   684→    const m = db.query("SELECT * FROM Message WHERE id = ?").get(p.messageId) as
+   685→      | { id: string; channelId: string | null; dmKey: string | null; poll: string | null }
+   686→      | undefined;
+   687→    if (!m || !m.poll) return cb?.({ error: "Poll not found" });
+   688→    const poll = JSON.parse(m.poll);
+   689→    if (poll.endsAt < Date.now()) return cb?.({ error: "Poll has ended" });
+   690→    if (p.optionIndex < 0 || p.optionIndex >= poll.options.length) return cb?.({ error: "Bad option" });
+   691→    for (const opt of poll.options) opt.voters = (opt.voters as string[]).filter((v) => v !== user!.id);
+   692→    poll.options[p.optionIndex].voters.push(user!.id);
+   693→    db.run("UPDATE Message SET poll = ? WHERE id = ?", [JSON.stringify(poll), p.messageId]);
+   694→    const msg = messageWithJoins(p.messageId);
+   695→    if (m.channelId) io.to("ch:" + m.channelId).emit("chat:updated", msg);
+   696→    if (m.dmKey) io.to("dm:" + m.dmKey).emit("chat:updated", msg);
+   697→    cb?.({ ok: true });
+   698→  });
+   699→
+   700→  /* ---- coins, claim, leaderboard ---- */
+   701→  socket.on("coins:claim", (cb) => {
+   702→    const u = freshUser();
+   703→    const now = new Date();
+   704→    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+   705→    const startOfYesterday = startOfToday - 86400000;
+   706→    if (u.lastClaimAt && Number(u.lastClaimAt) >= startOfToday)
+   707→      return cb?.({ error: "Already claimed today" });
+   708→    const streak = u.lastClaimAt && Number(u.lastClaimAt) >= startOfYesterday ? u.streak + 1 : 1;
+   709→    const reward = 20 * Math.min(streak, 7);
+   710→    db.run("UPDATE User SET coins = coins + ?, streak = ?, lastClaimAt = ? WHERE id = ?", [
+   711→      reward, streak, Date.now(), u.id,
+   712→    ]);
+   713→    emitUserUpdate(io, u.id);
+   714→    cb?.({ ok: true, streak, reward });
+   715→  });
+   716→
+   717→  socket.on("leaderboard", (mode: string, cb) => {
+   718→    const col = ["xp", "coins", "msgs", "streak"].includes(mode) ? mode : "xp";
+   719→    const rows =
+   720→      col === "msgs"
+   721→        ? db
+   722→            .query(
+   723→              `SELECT u.username, u.displayName, COUNT(m.id) AS score FROM User u
+   724→               JOIN Message m ON m.userId = u.id AND m.deleted = 0
+   725→               GROUP BY u.id ORDER BY score DESC LIMIT 15`
+   726→            )
+   727→            .all()
+   728→        : db
+   729→            .query(
+   730→              `SELECT username, displayName, ${col === "coins" ? "coins" : col === "xp" ? "xp" : "streak"} AS score
+   731→               FROM User WHERE banned = 0 ORDER BY score DESC LIMIT 15`
+   732→            )
+   733→            .all();
+   734→    cb?.(rows);
+   735→  });
+   736→
+   737→  /* ---- soundboard ---- */
+   738→  socket.on("sound:play", (soundId: string) => {
+   739→    const cfg = settings();
+   740→    if (!cfg.soundboard) return;
+   741→    if (muted(freshUser())) return;
+   742→    io.emit("sound:play", { soundId: String(soundId).slice(0, 24), by: user!.username });
+   743→  });
+   744→
+   745→  /* ---- listen party ---- */
+   746→  socket.on("party:join", (cb) => {
+   747→    socket.join("party");
+   748→    const state = partyState;
+   749→    const members = countInRoom(io, "party");
+   750→    cb?.({ ...state, members });
+   751→    io.to("party").emit("party:members", members);
+   752→  });
+   753→
+   754→  socket.on("party:leave", () => {
+   755→    socket.leave("party");
+   756→    io.to("party").emit("party:members", countInRoom(io, "party"));
+   757→  });
+   758→
+   759→  socket.on("party:state", (state: { trackId: string; position: number; playing: boolean }) => {
+   760→    if (!state || typeof state.trackId !== "string") return;
+   761→    partyState = {
+   762→      trackId: state.trackId.slice(0, 64),
+   763→      position: Number(state.position) || 0,
+   764→      playing: !!state.playing,
+   765→      ts: Date.now(),
+   766→      host: user!.username,
+   767→    };
+   768→    io.to("party").emit("party:state", partyState);
+   769→  });
+   770→
+   771→  socket.on("party:chat", (text: string) => {
+   772→    io.to("party").emit("party:chat", {
+   773→      by: user!.username,
+   774→      text: String(text ?? "").slice(0, 200),
+   775→    });
+   776→  });
+   777→
+   778→  /* ---- private channels ---- */
+   779→  socket.on("channel:create", (p: { name: string; minutes: number }, cb) => {
+   780→    const name = String(p?.name ?? "")
+   781→      .toLowerCase()
+   782→      .replace(/[^a-z0-9-]/g, "-")
+   783→      .slice(0, 24)
+   784→      .replace(/^-+|-+$/g, "");
+   785→    if (name.length < 3) return cb?.({ error: "Name must be at least 3 characters" });
+   786→    const exists = db.query("SELECT id FROM Channel WHERE name = ?").get(name);
+   787→    if (exists) return cb?.({ error: "That channel name is taken" });
+   788→    const id = cuidish();
+   789→    const code = Math.random().toString(36).slice(2, 8).toUpperCase();
+   790→    const expiresAt = p?.minutes && p.minutes > 0 ? Date.now() + p.minutes * 60000 : null;
+   791→    db.run(
+   792→      `INSERT INTO Channel (id, name, topic, kind, isPrivate, inviteCode, expiresAt, locked, createdBy, createdAt)
+   793→       VALUES (?, ?, ?, 'text', 1, ?, ?, 0, ?, ?)`,
+   794→      [id, name, "Private channel", code, expiresAt, user!.id, Date.now()]
+   795→    );
+   796→    db.run('INSERT INTO "Group" (id, name, createdBy, createdAt) VALUES (?, ?, ?, ?)', [
+   797→      id, name, user!.id, Date.now(),
+   798→    ]);
+   799→    db.run("INSERT INTO GroupMember (id, groupId, userId) VALUES (?, ?, ?)", [cuidish(), id, user!.id]);
+   800→    cb?.({ ok: true, id, name, code });
+   801→  });
+   802→
+   803→  socket.on("channel:join", (code: string, cb) => {
+   804→    const ch = db
+   805→      .query("SELECT * FROM Channel WHERE isPrivate = 1 AND inviteCode = ?")
+   806→      .get(String(code ?? "").toUpperCase().trim()) as
+   807→      | { id: string; name: string; expiresAt: number | null }
+   808→      | undefined;
+   809→    if (!ch) return cb?.({ error: "Invalid invite code" });
+   810→    if (ch.expiresAt && Number(ch.expiresAt) < Date.now())
+   811→      return cb?.({ error: "This channel has expired" });
+   812→    db.run('INSERT OR IGNORE INTO GroupMember (id, groupId, userId) VALUES (?, ?, ?)', [
+   813→      cuidish(), ch.id, user!.id,
+   814→    ]);
+   815→    cb?.({ ok: true, id: ch.id, name: ch.name });
+   816→  });
+   817→
+   818→  /* ---- moderation ---- */
+   819→  socket.on("mod:action", (p: { action: string; target?: string; seconds?: number; reason?: string; value?: string }, cb) => {
+   820→    const u = freshUser();
+   821→    if (!isStaff(u)) return cb?.({ error: "Staff only" });
+   822→    const action = String(p?.action ?? "");
+   823→    const target = p.target ? getUserByUsername(String(p.target).trim()) : null;
+   824→
+   825→    const roleRank = (r: string) => ({ owner: 3, admin: 2, mod: 1, member: 0 }[r] ?? 0);
+   826→    if (target && roleRank(target.role) >= roleRank(u.role) && target.id !== u.id)
+   827→      return cb?.({ error: "You cannot moderate that user" });
+   828→
+   829→    switch (action) {
+   830→      case "mute": {
+   831→        if (!target) return cb?.({ error: "Target not found" });
+   832→        const secs = Math.min(86400 * 30, Math.max(60, p.seconds ?? 600));
+   833→        db.run("UPDATE User SET mutedUntil = ? WHERE id = ?", [Date.now() + secs * 1000, target.id]);
+   834→        logMod(io, u.username, target.username, "mute", `${secs}s`);
+   835→        return cb?.({ ok: true });
+   836→      }
+   837→      case "unmute": {
+   838→        if (!target) return cb?.({ error: "Target not found" });
+   839→        db.run("UPDATE User SET mutedUntil = NULL WHERE id = ?", [target.id]);
+   840→        logMod(io, u.username, target.username, "unmute", "");
+   841→        return cb?.({ ok: true });
+   842→      }
+   843→      case "warn": {
+   844→        if (!target) return cb?.({ error: "Target not found" });
+   845→        const id = insertMessage(user!.id, `⚠️ ${target.username} has been warned${p.reason ? `: ${p.reason}` : "."}`, {
+   846→          channelId: p.value,
+   847→          isSystem: true,
+   848→        });
+   849→        io.to("ch:" + p.value).emit("chat:message", messageWithJoins(id));
+   850→        logMod(io, u.username, target.username, "warn", String(p.reason ?? ""));
+   851→        return cb?.({ ok: true });
+   852→      }
+   853→      case "ban": {
+   854→        if (!target) return cb?.({ error: "Target not found" });
+   855→        if (target.role === "owner") return cb?.({ error: "Cannot ban the owner" });
+   856→        db.run("UPDATE User SET banned = 1, banReason = ? WHERE id = ?", [
+   857→          String(p.reason ?? "rule violation").slice(0, 200), target.id,
+   858→        ]);
+   859→        for (const [sid, o] of online) if (o.user.id === target.id) io.to(sid).disconnectSockets(true);
+   860→        logMod(io, u.username, target.username, "ban", String(p.reason ?? ""));
+   861→        return cb?.({ ok: true });
+   862→      }
+   863→      case "unban": {
+   864→        if (!target) return cb?.({ error: "Target not found" });
+   865→        db.run("UPDATE User SET banned = 0, banReason = NULL WHERE id = ?", [target.id]);
+   866→        logMod(io, u.username, target.username, "unban", "");
+   867→        return cb?.({ ok: true });
+   868→      }
+   869→      case "role": {
+   870→        if (!target) return cb?.({ error: "Target not found" });
+   871→        const role = String(p.value ?? "");
+   872→        if (!["member", "mod", "admin"].includes(role)) return cb?.({ error: "Bad role" });
+   873→        if (u.role !== "owner" && role !== "member") return cb?.({ error: "Only the owner grants staff roles" });
+   874→        db.run("UPDATE User SET role = ? WHERE id = ?", [role, target.id]);
+   875→        logMod(io, u.username, target.username, `role → ${role}`, "");
+   876→        return cb?.({ ok: true });
+   877→      }
+   878→      case "lockChannel":
+   879→      case "unlockChannel": {
+   880→        db.run("UPDATE Channel SET locked = ? WHERE id = ?", [action === "lockChannel" ? 1 : 0, p.value]);
+   881→        io.to("ch:" + p.value).emit("chat:notice", action === "lockChannel" ? "Channel locked by staff." : "Channel unlocked.");
+   882→        logMod(io, u.username, null, action, String(p.value));
+   883→        return cb?.({ ok: true });
+   884→      }
+   885→      case "clearChannel": {
+   886→        db.run("UPDATE Message SET deleted = 1 WHERE channelId = ?", [p.value]);
+   887→        io.to("ch:" + p.value).emit("chat:cleared");
+   888→        logMod(io, u.username, null, "clearChannel", String(p.value));
+   889→        return cb?.({ ok: true });
+   890→      }
+   891→      case "settings": {
+   892→        const cfg = settings();
+   893→        updateSettings({
+   894→          wordFilter: p.value !== undefined ? String(p.value).slice(0, 2000) : cfg.wordFilter,
+   895→          automodEnabled: p.seconds !== undefined ? (p.seconds ? 1 : 0) : cfg.automodEnabled,
+   896→        });
+   897→        logMod(io, u.username, null, "settings", String(p.value ?? ""));
+   898→        return cb?.({ ok: true, settings: settings() });
+   899→      }
+   900→      case "registrations": {
+   901→        const cfg = settings();
+   902→        updateSettings({ registrations: cfg.registrations ? 0 : 1 });
+   903→        return cb?.({ ok: true, enabled: settings().registrations });
+   904→      }
+   905→      default:
+   906→        return cb?.({ error: "Unknown action" });
+   907→    }
+   908→  });
+   909→
+   910→  socket.on("mod:audit", (cb) => {
+   911→    if (!isStaff(user!)) return cb?.({ error: "Staff only" });
+   912→    const rows = db
+   913→      .query("SELECT * FROM ModAction ORDER BY createdAt DESC LIMIT 50")
+   914→      .all();
+   915→    cb?.(rows);
+   916→  });
+   917→
+   918→  socket.on("mod:restrictions", (cb) => {
+   919→    if (!isStaff(user!)) return cb?.({ error: "Staff only" });
+   920→    const banned = db.query("SELECT username, banReason, createdAt FROM User WHERE banned = 1").all();
+   921→    const mutedRows = db
+   922→      .query("SELECT username, mutedUntil FROM User WHERE mutedUntil > ?")
+   923→      .all(Date.now());
+   924→    cb?.({ banned, muted: mutedRows });
+   925→  });
+   926→
+   927→  /* ---- disconnect ---- */
+   928→  socket.on("disconnect", () => {
+   929→    online.delete(socket.id);
+   930→    const set = usernameToSockets.get(user!.username);
+   931→    if (set) {
+   932→      set.delete(socket.id);
+   933→      if (!set.size) usernameToSockets.delete(user!.username);
+   934→    }
+   935→    broadcastPresence(io);
+   936→  });
+   937→});
+   938→
+   939→/* ---------------- party state ---------------- */
+   940→
+   941→let partyState = { trackId: "", position: 0, playing: false, ts: 0, host: "" };
+   942→
+   943→function countInRoom(io: Server, room: string) {
+   944→  const sids = io.sockets.adapter.rooms.get(room);
+   945→  return sids ? sids.size : 0;
+   946→}
+   947→
+   948→/* ---------------- helpers: casino, counting, logs ---------------- */
+   949→
+   950→function logMod(io: Server, actor: string | null, target: string | null, action: string, reason: string) {
+   951→  db.run(
+   952→    "INSERT INTO ModAction (id, actorId, targetId, action, reason, createdAt) VALUES (?, ?, ?, ?, ?, ?)",
+   953→    [cuidish(), actor ?? "auto-mod", target ?? "", action, reason, Date.now()]
+   954→  );
+   955→  const logChannel = db.query("SELECT id FROM Channel WHERE name = 'logs'").get() as
+   956→    | { id: string }
+   957→    | undefined;
+   958→  if (logChannel) {
+   959→    const id = insertMessage(
+   960→      SYSTEM_USER_ID,
+   961→      `${actor ?? "auto-mod"} → ${action}${target ? ` on @${target}` : ""}${reason ? ` (${reason})` : ""}`,
+   962→      { channelId: logChannel.id, isSystem: true }
+   963→    );
+   964→    io.to("ch:" + logChannel.id).emit("chat:message", messageWithJoins(id));
+   965→  }
+   966→}
+   967→
+   968→function handleCasino(socket: Socket, io: Server, u: UserRow, ch: { id: string; kind: string }, content: string, cb: (r: unknown) => void) {
+   969→  const parts = content.slice(1).split(/\s+/);
+   970→  const cmd = parts[0]?.toLowerCase();
+   971→  const bet = Math.max(1, Math.min(1000, parseInt(parts[1] ?? "10", 10) || 10));
+   972→
+   973→  const sys = (text: string) => {
+   974→    const id = insertMessage(u.id, text, { channelId: ch.id, isSystem: true });
+   975→    io.to("ch:" + ch.id).emit("chat:message", messageWithJoins(id));
+   976→  };
+   977→
+   978→  if (u.coins < bet) {
+   979→    return cb?.({ error: "Not enough coins for that bet" });
+   980→  }
+   981→
+   982→  if (cmd === "flip") {
+   983→    const side = (parts[2] ?? "heads").toLowerCase();
+   984→    if (!["heads", "tails"].includes(side)) return cb?.({ error: "Usage: /flip <bet> heads|tails" });
+   985→    addCoins(u.id, -bet);
+   986→    const result = Math.random() < 0.5 ? "heads" : "tails";
+   987→    if (side === result) {
+   988→      addCoins(u.id, bet * 2);
+   989→      sys(`🪙 ${result} — ${u.username} won ${bet} coins`);
+   990→    } else {
+   991→      sys(`🪙 ${result} — ${u.username} lost ${bet} coins`);
+   992→    }
+   993→    emitUserUpdate(io, u.id);
+   994→    return cb?.({ ok: true });
+   995→  }
+   996→  if (cmd === "slots") {
+   997→    addCoins(u.id, -bet);
+   998→    const reels = slotsSpin();
+   999→    const jackpot = reels[0] === reels[1] && reels[1] === reels[2];
+  1000→    const two = reels[0] === reels[1] || reels[1] === reels[2] || reels[0] === reels[2];
+  1001→    let win = 0;
+  1002→    if (jackpot) win = bet * 10;
+  1003→    else if (two) win = Math.floor(bet * 1.5);
+  1004→    if (win) addCoins(u.id, win);
+  1005→    sys(
+  1006→      `${reels.join(" ")} — ${u.username} ${win ? `won ${win} coins` : `lost ${bet} coins`}`
+  1007→    );
+  1008→    emitUserUpdate(io, u.id);
+  1009→    return cb?.({ ok: true });
+  1010→  }
+  1011→  if (cmd === "balance" || cmd === "bal") {
+  1012→    return cb?.({ ok: true, notice: `You have ${u.coins} coins.` });
+  1013→  }
+  1014→  return cb?.({ error: "Commands: /flip <bet> heads|tails · /slots <bet> · /bal" });
+  1015→}
+  1016→
+  1017→function handleCounting(socket: Socket, io: Server, u: UserRow, ch: { id: string; kind: string }, content: string, cb: (r: unknown) => void) {
+  1018→  const num = parseInt(content.trim(), 10);
+  1019→  const lastRow = db
+  1020→    .query(
+  1021→      `SELECT m.content, m.userId FROM Message m WHERE m.channelId = ? AND m.isSystem = 0 AND m.deleted = 0
+  1022→       ORDER BY m.createdAt DESC LIMIT 1`
+  1023→    )
+  1024→    .get(ch.id) as { content: string; userId: string } | undefined;
+  1025→  const expected = lastRow ? (parseInt(lastRow.content, 10) || 0) + 1 : 1;
+  1026→  if (!Number.isFinite(num) || String(num) !== content.trim()) {
+  1027→    return cb?.({ error: "Numbers only in this channel" });
+  1028→  }
+  1029→  if (lastRow && lastRow.userId === u.id) {
+  1030→    return cb?.({ error: "You can't count twice in a row" });
+  1031→  }
+  1032→  if (num !== expected) {
+  1033→    const id = insertMessage(u.id, content, { channelId: ch.id });
+  1034→    io.to("ch:" + ch.id).emit("chat:message", messageWithJoins(id));
+  1035→    const sysId = insertMessage(
+  1036→      u.id,
+  1037→      `❌ ${u.username} broke the chain at ${expected - 1}. Counting restarts at 1.`,
+  1038→      { channelId: ch.id, isSystem: true }
+  1039→    );
+  1040→    io.to("ch:" + ch.id).emit("chat:message", messageWithJoins(sysId));
+  1041→    return cb?.({ ok: true });
+  1042→  }
+  1043→  const id = insertMessage(u.id, content, { channelId: ch.id });
+  1044→  io.to("ch:" + ch.id).emit("chat:message", messageWithJoins(id));
+  1045→  if (num % 100 === 0) {
+  1046→    addCoins(u.id, 10);
+  1047→    emitUserUpdate(io, u.id);
+  1048→    const sysId = insertMessage(u.id, `🏆 ${num}! ${u.username} earned 10 coins.`, {
+  1049→      channelId: ch.id,
+  1050→      isSystem: true,
+  1051→    });
+  1052→    io.to("ch:" + ch.id).emit("chat:message", messageWithJoins(sysId));
+  1053→  }
+  1054→  return cb?.({ ok: true });
+  1055→}
+  1056→
+  1057→/* ---------------- start ---------------- */
+  1058→
+  1059→httpServer.listen(PORT, () => {
+  1060→  console.log(`Memphis chat service running on :${PORT}`);
+  1061→});
+  1062→
+  1063→process.on("SIGTERM", () => {
+  1064→  httpServer.close(() => process.exit(0));
+  1065→});
+  1066→process.on("SIGINT", () => {
+  1067→  httpServer.close(() => process.exit(0));
+  1068→});
+  1069→

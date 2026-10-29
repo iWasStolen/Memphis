@@ -424,19 +424,41 @@ export function bootProxy(transport: ProxyTransport = "epoxy"): Promise<ProxyHan
 /* v2 routes by per-frame prefix (/~/sj/<controller>/<frame>/…). A Frame's
    go(url) encodes the target and sets element.src. We keep one DETACHED
    encoder frame per encoded URL: the SW serves anything under its prefix
-   (the element never has to be in the DOM — routing is URL-prefix based),
-   so a pooled detached frame gives us a stable encoded href for our
-   src-driven iframes while the engine handles the actual rewriting. */
+   (routing is URL-prefix based and served from the page's fetchHandler —
+   the element itself never has to load), so a pooled detached frame gives
+   us a stable encoded href for our src-driven iframes while the engine
+   handles the actual rewriting.
 
-const encoderFrames = new Map<string, V2Frame>();
+   The encoder frame is parked on about:blank right after encoding so the
+   target page is NOT loaded (and kept running) a second time in the
+   background — only the visible iframe actually loads it. Entries are
+   capped; evicting the oldest just means a re-encode (fresh prefix) if
+   that URL is ever revisited. */
+
+const encoderFrames = new Map<string, { frame: V2Frame; href: string }>();
+const ENCODER_CACHE_MAX = 40;
 
 function proxiedHrefSync(controller: V2Controller, url: string): string {
   const cached = encoderFrames.get(url);
-  if (cached) return cached.element.src;
+  if (cached) return cached.href;
   const frame = controller.createFrame();
   frame.go(url);
-  encoderFrames.set(url, frame);
-  return frame.element.src;
+  const href = frame.element.src;
+  /* done — stop the detached frame from loading/running the target page */
+  frame.element.src = "about:blank";
+
+  if (encoderFrames.size >= ENCODER_CACHE_MAX) {
+    const oldest = encoderFrames.keys().next().value;
+    if (oldest !== undefined) {
+      const old = encoderFrames.get(oldest)!;
+      const idx = controller.frames.indexOf(old.frame);
+      if (idx !== -1) controller.frames.splice(idx, 1);
+      old.frame.element.remove();
+      encoderFrames.delete(oldest);
+    }
+  }
+  encoderFrames.set(url, { frame, href });
+  return href;
 }
 
 /* ---------------- transport switching ---------------- */

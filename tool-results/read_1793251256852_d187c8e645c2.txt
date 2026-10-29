@@ -1,0 +1,1121 @@
+     1→"use client";
+     2→
+     3→/* ============================================================
+     4→   Memphis chat — auth gate, channels, DMs, groups, presence,
+     5→   polls, coins, moderation.
+     6→   ============================================================ */
+     7→
+     8→import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+     9→import { getSocket, useAuth, emitAck, destroySocket } from "@/lib/socket";
+    10→import { api, getToken, setToken, useUI } from "@/lib/store";
+    11→import { ChatMessage, ChannelInfo, ChatUserSummary, SessionUser } from "@/lib/types";
+    12→import { Button } from "@/components/ui/button";
+    13→import { Input } from "@/components/ui/input";
+    14→import { toast } from "sonner";
+    15→import {
+    16→  Send,
+    17→  Hash,
+    18→  Lock,
+    19→  Users as UsersIcon,
+    20→  Plus,
+    21→  Trophy,
+    22→  Volume2,
+    23→  Shield,
+    24→  UserPlus,
+    25→  LogOut,
+    26→  Coins,
+    27→  Flame,
+    28→  BarChart3,
+    29→  Vote,
+    30→  Trash2,
+    31→  UserRound,
+    32→  MessageSquare,
+    33→  GitBranch,
+    34→} from "lucide-react";
+    35→import {
+    36→  LeaderboardDialog,
+    37→  ProfileDialog,
+    38→  ModDialog,
+    39→  SoundboardDialog,
+    40→  FriendsDialog,
+    41→  CreateChannelDialog,
+    42→  JoinChannelDialog,
+    43→  CreateGroupDialog,
+    44→  playLocalSound,
+    45→} from "./chat-panels";
+    46→
+    47→const RULES_KEY = "memphis-chat-rules-agreed";
+    48→
+    49→const RULES = [
+    50→  "No personal information — yours or anyone else's.",
+    51→  "Be respectful; no harassment, hate speech or bullying.",
+    52→  "Keep it school-safe: no NSFW, violent or illegal content.",
+    53→  "No spam, flooding, scams or advertising.",
+    54→  "No impersonation of staff or other members.",
+    55→  "Respect staff decisions; appeal through #appeals if needed.",
+    56→  "Use channels for their purpose (counting = numbers only).",
+    57→  "Report problems with the footer link — staff will review.",
+    58→];
+    59→
+    60→/* ---------------- auth panel ---------------- */
+    61→
+    62→function AuthPanel() {
+    63→  const setUser = useAuth((s) => s.setUser);
+    64→  const [mode, setMode] = useState<"login" | "register">("login");
+    65→  const [username, setUsername] = useState("");
+    66→  const [password, setPassword] = useState("");
+    67→  const [recovery, setRecovery] = useState("");
+    68→  const [busy, setBusy] = useState(false);
+    69→  const [error, setError] = useState("");
+    70→
+    71→  const submit = async () => {
+    72→    if (busy) return;
+    73→    setBusy(true);
+    74→    setError("");
+    75→    const r = await api<{
+    76→      token?: string;
+    77→      user?: SessionUser;
+    78→      error?: string;
+    79→    }>(`/api/auth/${mode}`, {
+    80→      method: "POST",
+    81→      body: JSON.stringify({ username, password, recoveryCode: recovery || undefined }),
+    82→    });
+    83→    setBusy(false);
+    84→    if (!r.ok || !r.data.token || !r.data.user) {
+    85→      setError(r.data.error || "Something went wrong — try again.");
+    86→      return;
+    87→    }
+    88→    setToken(r.data.token);
+    89→    setUser(r.data.user);
+    90→  };
+    91→
+    92→  return (
+    93→    <div className="flex-1 flex items-center justify-center p-4">
+    94→      <div className="w-full max-w-sm">
+    95→        <div className="text-center mb-6">
+    96→          <h1 className="text-xl font-semibold text-white">Study groups</h1>
+    97→          <p className="text-[13px] text-[#8f8f8f] mt-1">
+    98→            Register with any username — no email needed. Your account earns XP,
+    99→            coins and streaks.
+   100→          </p>
+   101→        </div>
+   102→
+   103→        <div className="rounded-xl border border-[#1f1f1f] bg-[#080808] p-5">
+   104→          <div className="flex rounded-lg border border-[#1f1f1f] overflow-hidden mb-4">
+   105→            {(["login", "register"] as const).map((m) => (
+   106→              <button
+   107→                key={m}
+   108→                onClick={() => {
+   109→                  setMode(m);
+   110→                  setError("");
+   111→                }}
+   112→                className={`flex-1 px-3 py-1.5 text-[13px] capitalize transition-colors ${
+   113→                  mode === m
+   114→                    ? "bg-white text-black"
+   115→                    : "text-[#9a9a9a] hover:bg-[#101010] hover:text-white"
+   116→                }`}
+   117→              >
+   118→                {m === "login" ? "Log in" : "Register"}
+   119→              </button>
+   120→            ))}
+   121→          </div>
+   122→
+   123→          <form
+   124→            onSubmit={(e) => {
+   125→              e.preventDefault();
+   126→              void submit();
+   127→            }}
+   128→            className="space-y-3"
+   129→          >
+   130→            <div>
+   131→              <label htmlFor="chat-username" className="text-[12px] text-[#888]">
+   132→                Username
+   133→              </label>
+   134→              <Input
+   135→                id="chat-username"
+   136→                autoComplete="username"
+   137→                value={username}
+   138→                onChange={(e) => setUsername(e.target.value)}
+   139→                placeholder="study_bear_42"
+   140→                maxLength={16}
+   141→                required
+   142→                className="mt-1 bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] focus-visible:ring-white/30"
+   143→              />
+   144→            </div>
+   145→            <div>
+   146→              <label htmlFor="chat-password" className="text-[12px] text-[#888]">
+   147→                Password
+   148→              </label>
+   149→              <Input
+   150→                id="chat-password"
+   151→                type="password"
+   152→                autoComplete={mode === "login" ? "current-password" : "new-password"}
+   153→                value={password}
+   154→                onChange={(e) => setPassword(e.target.value)}
+   155→                placeholder={mode === "register" ? "min 6 characters" : "••••••"}
+   156→                minLength={6}
+   157→                required
+   158→                className="mt-1 bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] focus-visible:ring-white/30"
+   159→              />
+   160→            </div>
+   161→            {mode === "register" && (
+   162→              <div>
+   163→                <label htmlFor="chat-recovery" className="text-[12px] text-[#888]">
+   164→                  Recovery code <span className="text-[#555]">(optional)</span>
+   165→                </label>
+   166→                <Input
+   167→                  id="chat-recovery"
+   168→                  value={recovery}
+   169→                  onChange={(e) => setRecovery(e.target.value)}
+   170→                  placeholder="e.g. MY-CODE-2026"
+   171→                  maxLength={32}
+   172→                  className="mt-1 bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] focus-visible:ring-white/30"
+   173→                />
+   174→                <p className="text-[11px] text-[#555] mt-1">
+   175→                  If you lose your password, staff can verify this code.
+   176→                </p>
+   177→              </div>
+   178→            )}
+   179→            {error && (
+   180→              <p className="text-[12px] text-white bg-[#161616] border border-[#333] rounded px-2.5 py-1.5">
+   181→                {error}
+   182→              </p>
+   183→            )}
+   184→            <Button
+   185→              type="submit"
+   186→              disabled={busy || !username.trim() || password.length < 6}
+   187→              className="w-full bg-white text-black hover:bg-[#e0e0e0]"
+   188→            >
+   189→              {busy ? "…" : mode === "login" ? "Log in" : "Create account"}
+   190→            </Button>
+   191→          </form>
+   192→        </div>
+   193→
+   194→        <p className="text-[11px] text-[#555] text-center mt-4 leading-relaxed">
+   195→          By joining you agree to keep the chat school-appropriate. Moderators
+   196→          can mute or ban accounts that break the rules.
+   197→        </p>
+   198→      </div>
+   199→    </div>
+   200→  );
+   201→}
+   202→
+   203→/* ---------------- rules gate ---------------- */
+   204→
+   205→function RulesGate({ onAgree }: { onAgree: () => void }) {
+   206→  const [checked, setChecked] = useState(false);
+   207→  return (
+   208→    <div className="flex-1 flex items-center justify-center p-4">
+   209→      <div className="w-full max-w-md rounded-xl border border-[#1f1f1f] bg-[#080808] p-6">
+   210→        <h2 className="text-base font-semibold text-white mb-1">Community rules</h2>
+   211→        <p className="text-[12px] text-[#777] mb-4">
+   212→          Read them once — then you&apos;re in.
+   213→        </p>
+   214→        <ol className="space-y-2.5 mb-5">
+   215→          {RULES.map((r, i) => (
+   216→            <li key={i} className="flex gap-2.5 text-[13px] text-[#c9c9c9]">
+   217→              <span className="font-mono text-[11px] text-[#555] mt-0.5 shrink-0">
+   218→                {String(i + 1).padStart(2, "0")}
+   219→              </span>
+   220→              {r}
+   221→            </li>
+   222→          ))}
+   223→        </ol>
+   224→        <label className="flex items-start gap-2.5 text-[13px] text-[#c9c9c9] mb-4 cursor-pointer">
+   225→          <input
+   226→            type="checkbox"
+   227→            checked={checked}
+   228→            onChange={(e) => setChecked(e.target.checked)}
+   229→            className="mt-0.5 accent-white"
+   230→          />
+   231→          I agree to follow these rules.
+   232→        </label>
+   233→        <Button
+   234→          onClick={onAgree}
+   235→          disabled={!checked}
+   236→          className="w-full bg-white text-black hover:bg-[#e0e0e0]"
+   237→        >
+   238→          I Agree &amp; Continue
+   239→        </Button>
+   240→      </div>
+   241→    </div>
+   242→  );
+   243→}
+   244→
+   245→/* ---------------- message bubble ---------------- */
+   246→
+   247→function MessageBubble({
+   248→  m,
+   249→  me,
+   250→  onProfile,
+   251→  onDelete,
+   252→  onVote,
+   253→}: {
+   254→  m: ChatMessage;
+   255→  me: SessionUser | null;
+   256→  onProfile: (u: string) => void;
+   257→  onDelete: (id: string) => void;
+   258→  onVote: (messageId: string, optionIndex: number) => void;
+   259→}) {
+   260→  const poll = m.poll;
+   261→  const ended = poll && poll.endsAt < Date.now();
+   262→  const totalVotes = poll
+   263→    ? poll.options.reduce((a, o) => a + o.voters.length, 0)
+   264→    : 0;
+   265→  const isStaff = me && ["owner", "admin", "mod"].includes(me.role);
+   266→
+   267→  if (m.isSystem || m.deleted) {
+   268→    return (
+   269→      <div className="text-center py-1">
+   270→        <span className="text-[11.5px] text-[#666] bg-[#0a0a0a] border border-[#161616] rounded-full px-3 py-1 inline-block">
+   271→          {m.deleted ? "message deleted" : m.content}
+   272→        </span>
+   273→      </div>
+   274→    );
+   275→  }
+   276→
+   277→  return (
+   278→    <div className="group flex gap-2.5 px-1 py-1 hover:bg-[#0a0a0a] rounded-md">
+   279→      <button
+   280→        onClick={() => onProfile(m.username)}
+   281→        aria-label={`View ${m.username}`}
+   282→        className="size-8 shrink-0 rounded-full border border-[#262626] flex items-center justify-center text-[11px] font-mono text-white hover:border-white transition-colors"
+   283→      >
+   284→        {(m.displayName || m.username).slice(0, 2).toUpperCase()}
+   285→      </button>
+   286→      <div className="min-w-0 flex-1">
+   287→        <div className="flex items-baseline gap-2">
+   288→          <button
+   289→            onClick={() => onProfile(m.username)}
+   290→            className="text-[13px] text-white font-medium hover:underline"
+   291→          >
+   292→            {m.displayName || m.username}
+   293→          </button>
+   294→          {m.role && m.role !== "member" && (
+   295→            <span className="text-[10px] font-mono uppercase border border-[#2a2a2a] rounded px-1 text-[#aaa]">
+   296→              {m.role}
+   297→            </span>
+   298→          )}
+   299→          <span className="text-[10.5px] text-[#555]">
+   300→            {new Date(m.createdAt).toLocaleTimeString([], {
+   301→              hour: "2-digit",
+   302→              minute: "2-digit",
+   303→            })}
+   304→          </span>
+   305→        </div>
+   306→
+   307→        <p className="text-[13.5px] text-[#d5d5d5] whitespace-pre-wrap break-words mt-0.5">
+   308→          {m.content}
+   309→        </p>
+   310→
+   311→        {poll && (
+   312→          <div className="mt-2 border border-[#1a1a1a] rounded-lg p-2.5 max-w-sm">
+   313→            <p className="text-[12px] text-[#999] flex items-center gap-1.5 mb-2">
+   314→              <Vote className="size-3" /> {poll.question}
+   315→              <span className="ml-auto text-[#555]">
+   316→                {ended ? "final" : `${Math.max(0, Math.round((poll.endsAt - Date.now()) / 60000))}m left`}
+   317→              </span>
+   318→            </p>
+   319→            {poll.options.map((o, i) => {
+   320→              const pct = totalVotes ? Math.round((o.voters.length / totalVotes) * 100) : 0;
+   321→              const voted = o.voters.includes(me?.id ?? "");
+   322→              return (
+   323→                <button
+   324→                  key={i}
+   325→                  disabled={!!ended}
+   326→                  onClick={() => onVote(m.id, i)}
+   327→                  className={`w-full text-left mb-1 last:mb-0 rounded border px-2 py-1.5 text-[12.5px] transition-colors ${
+   328→                    voted
+   329→                      ? "border-white text-white"
+   330→                      : "border-[#222] text-[#bbb] hover:border-[#444]"
+   331→                  }`}
+   332→                >
+   333→                  <span className="flex justify-between">
+   334→                    <span>{o.text}</span>
+   335→                    <span className="text-[#777] font-mono">
+   336→                      {pct}% ({o.voters.length})
+   337→                    </span>
+   338→                  </span>
+   339→                  <span className="block h-1 bg-[#1a1a1a] rounded-full mt-1 overflow-hidden">
+   340→                    <span
+   341→                      className="block h-full bg-white transition-all"
+   342→                      style={{ width: `${pct}%` }}
+   343→                    />
+   344→                  </span>
+   345→                </button>
+   346→              );
+   347→            })}
+   348→          </div>
+   349→        )}
+   350→      </div>
+   351→
+   352→      {(isStaff || m.userId === me?.id) && (
+   353→        <button
+   354→          onClick={() => onDelete(m.id)}
+   355→          aria-label="Delete message"
+   356→          className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 text-[#666] hover:text-white self-start"
+   357→        >
+   358→          <Trash2 className="size-3.5" />
+   359→        </button>
+   360→      )}
+   361→    </div>
+   362→  );
+   363→}
+   364→
+   365→/* ---------------- main view ---------------- */
+   366→
+   367→type Room =
+   368→  | { type: "channel"; id: string; name: string }
+   369→  | { type: "dm"; key: string; name: string }
+   370→  | { type: "group"; key: string; name: string };
+   371→
+   372→export default function ChatView() {
+   373→  const { user, setUser, logout } = useAuth();
+   374→  const { setView } = useUI();
+   375→  const [rulesAgreed, setRulesAgreed] = useState(true);
+   376→  const [connected, setConnected] = useState(false);
+   377→  const [channels, setChannels] = useState<ChannelInfo[]>([]);
+   378→  const [room, setRoom] = useState<Room | null>(null);
+   379→  const [messages, setMessages] = useState<ChatMessage[]>([]);
+   380→  const [input, setInput] = useState("");
+   381→  const [typing, setTyping] = useState<string[]>([]);
+   382→  const [presence, setPresence] = useState<ChatUserSummary[]>([]);
+   383→  const [dmList, setDmList] = useState<{ key: string; name: string }[]>([]);
+   384→  const [groups, setGroups] = useState<{ id: string; name: string; memberIds: string[] }[]>([]);
+   385→  const [friendsKey, setFriendsKey] = useState(0);
+   386→  /* dialogs */
+   387→  const [showLeaderboard, setShowLeaderboard] = useState(false);
+   388→  const [showSoundboard, setShowSoundboard] = useState(false);
+   389→  const [showFriends, setShowFriends] = useState(false);
+   390→  const [showMod, setShowMod] = useState(false);
+   391→  const [showCreateChannel, setShowCreateChannel] = useState(false);
+   392→  const [showJoinChannel, setShowJoinChannel] = useState(false);
+   393→  const [showCreateGroup, setShowCreateGroup] = useState(false);
+   394→  const [profileUser, setProfileUser] = useState<string | null>(null);
+   395→  const [modUser, setModUser] = useState("");
+   396→  /* poll creator */
+   397→  const [pollOpen, setPollOpen] = useState(false);
+   398→  const [pollQ, setPollQ] = useState("");
+   399→  const [pollOptions, setPollOptions] = useState(["", ""]);
+   400→  const [pollMinutes, setPollMinutes] = useState(15);
+   401→  /* claim */
+   402→  const [claimBusy, setClaimBusy] = useState(false);
+   403→  const scrollRef = useRef<HTMLDivElement>(null);
+   404→  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+   405→  const joinedRef = useRef<string | null>(null);
+   406→
+   407→  const isStaff = !!user && ["owner", "admin", "mod"].includes(user.role);
+   408→
+   409→  /* ---------- boot: check session ---------- */
+   410→  useEffect(() => {
+   411→    const stored = getToken();
+   412→    setRulesAgreed(window.localStorage.getItem(RULES_KEY) === "1");
+   413→    if (!stored) {
+   414→      setUser(null);
+   415→      return;
+   416→    }
+   417→    void api<{ user: SessionUser | null }>("/api/auth/me").then((r) => {
+   418→      if (r.data.user) setUser(r.data.user);
+   419→      else {
+   420→        setToken(null);
+   421→        setUser(null);
+   422→      }
+   423→    });
+   424→  }, [setUser]);
+   425→
+   426→  /* ---------- socket wiring ---------- */
+   427→  useEffect(() => {
+   428→    if (!user) return;
+   429→    const s = getSocket();
+   430→    if (!s) return;
+   431→
+   432→    const onAuthOk = (u: SessionUser) => {
+   433→      setUser(u);
+   434→      setConnected(true);
+   435→      s.emit("channels:list", (list: ChannelInfo[]) => setChannels(list));
+   436→      void emitAck<{ id: string; name: string; memberIds: string[] }[]>("group:list").then(
+   437→        (r) => {
+   438→          const d = r as { id: string; name: string; memberIds: string[] }[];
+   439→          if (Array.isArray(d)) setGroups(d);
+   440→        }
+   441→      );
+   442→    };
+   443→    const onAuthError = () => {
+   444→      setToken(null);
+   445→      setUser(null);
+   446→      destroySocket();
+   447→    };
+   448→    const onConnect = () => {
+   449→      setConnected(true);
+   450→      s.emit("channels:list", (list: ChannelInfo[]) => setChannels(list));
+   451→    };
+   452→    const onDisconnect = () => setConnected(false);
+   453→    const onMessage = (m: ChatMessage) => {
+   454→      if (
+   455→        (room?.type === "channel" && m.channelId === room.id) ||
+   456→        (room?.type !== "channel" && m.dmKey && m.dmKey === roomKeyOf(room))
+   457→      )
+   458→        setMessages((cur) => [...cur, m]);
+   459→    };
+   460→    const onUpdated = (m: ChatMessage) =>
+   461→      setMessages((cur) => cur.map((x) => (x.id === m.id ? m : x)));
+   462→    const onDeleted = (id: string) =>
+   463→      setMessages((cur) => cur.map((x) => (x.id === id ? { ...x, deleted: true } : x)));
+   464→    const onCleared = () => setMessages([]);
+   465→    const onNotice = (text: string) => toast(text);
+   466→    const onTyping = (p: { username: string }) => {
+   467→      setTyping((t) => (t.includes(p.username) ? t : [...t, p.username]));
+   468→      setTimeout(() => setTyping((t) => t.filter((u) => u !== p.username)), 2500);
+   469→    };
+   470→    const onPresence = (list: ChatUserSummary[]) => setPresence(list);
+   471→    const onUserUpdate = (u: SessionUser) => {
+   472→      if (user && u.id === user.id) setUser(u);
+   473→    };
+   474→    const onIncoming = () => setFriendsKey((k) => k + 1);
+   475→    const onDmRefresh = () => setFriendsKey((k) => k + 1);
+   476→    const onSound = (p: { soundId: string; by: string }) => {
+   477→      playLocalSound(p.soundId);
+   478→      toast(`${p.by} played ${p.soundId}`);
+   479→    };
+   480→    const onInvited = () => {
+   481→      void emitAck<{ id: string; name: string; memberIds: string[] }[]>("group:list").then(
+   482→        (r) => {
+   483→          const d = r as { id: string; name: string; memberIds: string[] }[];
+   484→          if (Array.isArray(d)) setGroups(d);
+   485→        }
+   486→      );
+   487→      toast("You were added to a group");
+   488→    };
+   489→
+   490→    s.on("auth:ok", onAuthOk);
+   491→    s.on("auth:error", onAuthError);
+   492→    s.on("connect", onConnect);
+   493→    s.on("disconnect", onDisconnect);
+   494→    s.on("chat:message", onMessage);
+   495→    s.on("chat:updated", onUpdated);
+   496→    s.on("chat:deleted", onDeleted);
+   497→    s.on("chat:cleared", onCleared);
+   498→    s.on("chat:notice", onNotice);
+   499→    s.on("chat:typing", onTyping);
+   500→    s.on("presence:list", onPresence);
+   501→    s.on("user:update", onUserUpdate);
+   502→    s.on("friends:incoming", onIncoming);
+   503→    s.on("dm:refresh", onDmRefresh);
+   504→    s.on("sound:play", onSound);
+   505→    s.on("group:invited", onInvited);
+   506→
+   507→    if (s.connected) onConnect();
+   508→
+   509→    return () => {
+   510→      s.off("auth:ok", onAuthOk);
+   511→      s.off("auth:error", onAuthError);
+   512→      s.off("connect", onConnect);
+   513→      s.off("disconnect", onDisconnect);
+   514→      s.off("chat:message", onMessage);
+   515→      s.off("chat:updated", onUpdated);
+   516→      s.off("chat:deleted", onDeleted);
+   517→      s.off("chat:cleared", onCleared);
+   518→      s.off("chat:notice", onNotice);
+   519→      s.off("chat:typing", onTyping);
+   520→      s.off("presence:list", onPresence);
+   521→      s.off("user:update", onUserUpdate);
+   522→      s.off("friends:incoming", onIncoming);
+   523→      s.off("dm:refresh", onDmRefresh);
+   524→      s.off("sound:play", onSound);
+   525→      s.off("group:invited", onInvited);
+   526→    };
+   527→  }, [user, room, setUser]);
+   528→
+   529→  function roomKeyOf(r: Room | null): string | null {
+   530→    if (!r) return null;
+   531→    return r.type === "channel" ? null : r.key;
+   532→  }
+   533→
+   534→  /* ---------- join room ---------- */
+   535→  const openChannel = useCallback(async (ch: ChannelInfo) => {
+   536→    setRoom({ type: "channel", id: ch.id, name: ch.name });
+   537→    const s = getSocket();
+   538→    if (!s) return;
+   539→    if (joinedRef.current?.startsWith("ch:")) s.emit("chat:leave", joinedRef.current.slice(3));
+   540→    if (joinedRef.current?.startsWith("dm:")) s.emit("dm:join", ""); /* leave handled by server rooms */
+   541→    s.emit("chat:join", ch.id, (res: { messages?: ChatMessage[]; error?: string }) => {
+   542→      if (res.error) {
+   543→        toast.error(res.error);
+   544→        return;
+   545→      }
+   546→      setMessages(res.messages ?? []);
+   547→      joinedRef.current = "ch:" + ch.id;
+   548→    });
+   549→  }, []);
+   550→
+   551→  const openDm = useCallback(async (username: string) => {
+   552→    const r = await emitAck<{
+   553→      key: string;
+   554→      target: { username: string };
+   555→      messages: ChatMessage[];
+   556→      error?: string;
+   557→    }>("dm:open", username);
+   558→    if (r.error || !r.key) {
+   559→      toast.error(r.error || "Could not open DM");
+   560→      return;
+   561→    }
+   562→    setRoom({ type: "dm", key: r.key, name: r.target.username });
+   563→    setMessages(r.messages ?? []);
+   564→    setDmList((cur) =>
+   565→      cur.find((d) => d.key === r.key)
+   566→        ? cur
+   567→        : [{ key: r.key, name: r.target.username }, ...cur].slice(0, 20)
+   568→    );
+   569→    setProfileUser(null);
+   570→    setShowFriends(false);
+   571→  }, []);
+   572→
+   573→  const openGroup = useCallback(async (gid: string, name: string) => {
+   574→    const r = await emitAck<{
+   575→      key: string;
+   576→      members: ChatUserSummary[];
+   577→      messages: ChatMessage[];
+   578→      error?: string;
+   579→    }>("group:open", gid);
+   580→    if (r.error || !r.key) {
+   581→      toast.error(r.error || "Could not open group");
+   582→      return;
+   583→    }
+   584→    setRoom({ type: "group", key: r.key, name });
+   585→    setMessages(r.messages ?? []);
+   586→  }, []);
+   587→
+   588→  /* auto-join first channel when connected */
+   589→  useEffect(() => {
+   590→    if (connected && channels.length && !room) void openChannel(channels[0]);
+   591→  }, [connected, channels, room, openChannel]);
+   592→
+   593→  /* ---------- send ---------- */
+   594→  const send = async () => {
+   595→    const content = input.trim();
+   596→    if (!content || !room) return;
+   597→    setInput("");
+   598→    const payload =
+   599→      room.type === "channel"
+   600→        ? { channelId: room.id, content }
+   601→        : { dmKey: room.key, content };
+   602→    const r = await emitAck<{ ok?: boolean; error?: string; notice?: string }>(
+   603→      "chat:send",
+   604→      payload
+   605→    );
+   606→    if (r.error) toast.error(r.error);
+   607→    else if (r.notice) toast(r.notice);
+   608→  };
+   609→
+   610→  const onInputChange = (v: string) => {
+   611→    setInput(v);
+   612→    if (room?.type === "channel") {
+   613→      const s = getSocket();
+   614→      if (s && (!typingTimer.current || Date.now() - 0 > 0)) {
+   615→        s.emit("chat:typing", room.id);
+   616→        if (typingTimer.current) clearTimeout(typingTimer.current);
+   617→        typingTimer.current = setTimeout(() => {}, 1200);
+   618→      }
+   619→    }
+   620→  };
+   621→
+   622→  const votePoll = async (messageId: string, optionIndex: number) => {
+   623→    const r = await emitAck<{ ok?: boolean; error?: string }>("poll:vote", {
+   624→      messageId,
+   625→      optionIndex,
+   626→    });
+   627→    if (r.error) toast.error(r.error);
+   628→  };
+   629→
+   630→  const createPoll = async () => {
+   631→    if (!room || room.type !== "channel") return;
+   632→    const options = pollOptions.map((o) => o.trim()).filter(Boolean);
+   633→    if (!pollQ.trim() || options.length < 2) return;
+   634→    const r = await emitAck<{ ok?: boolean; error?: string }>("poll:create", {
+   635→      channelId: room.id,
+   636→      question: pollQ,
+   637→      options,
+   638→      minutes: pollMinutes,
+   639→    });
+   640→    if (r.error) toast.error(r.error);
+   641→    else {
+   642→      setPollOpen(false);
+   643→      setPollQ("");
+   644→      setPollOptions(["", ""]);
+   645→    }
+   646→  };
+   647→
+   648→  const claim = async () => {
+   649→    setClaimBusy(true);
+   650→    const r = await emitAck<{ ok?: boolean; streak?: number; reward?: number; error?: string }>(
+   651→      "coins:claim"
+   652→    );
+   653→    setClaimBusy(false);
+   654→    if (r.error) toast.error(r.error);
+   655→    else toast(`Daily claim: +${r.reward} coins · streak ${r.streak} day${r.streak === 1 ? "" : "s"}`);
+   656→  };
+   657→
+   658→  const deleteMessage = async (id: string) => {
+   659→    const r = await emitAck<{ ok?: boolean; error?: string }>("message:delete", id);
+   660→    if (r.error) toast.error(r.error);
+   661→  };
+   662→
+   663→  const doLogout = async () => {
+   664→    await api("/api/auth/logout", { method: "POST" });
+   665→    logout();
+   666→    setChannels([]);
+   667→    setRoom(null);
+   668→    setMessages([]);
+   669→    setConnected(false);
+   670→  };
+   671→
+   672→  /* auto-scroll */
+   673→  useEffect(() => {
+   674→    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+   675→  }, [messages, typing]);
+   676→
+   677→  /* ---------- render ---------- */
+   678→  if (!user) return <AuthPanel />;
+   679→  if (!rulesAgreed)
+   680→    return (
+   681→      <RulesGate
+   682→        onAgree={() => {
+   683→          window.localStorage.setItem(RULES_KEY, "1");
+   684→          setRulesAgreed(true);
+   685→        }}
+   686→      />
+   687→    );
+   688→
+   689→  const currentChannel =
+   690→    room?.type === "channel" ? channels.find((c) => c.id === room.id) : null;
+   691→  const onlineCount = presence.length;
+   692→
+   693→  return (
+   694→    <div className="flex-1 flex min-h-0">
+   695→      {/* sidebar */}
+   696→      <aside className="hidden md:flex flex-col w-56 shrink-0 border-r border-[#141414]">
+   697→        {/* account */}
+   698→        <div className="p-3 border-b border-[#141414]">
+   699→          <div className="flex items-center gap-2">
+   700→            <span className="size-8 rounded-full border border-[#262626] flex items-center justify-center text-[11px] font-mono text-white shrink-0">
+   701→              {(user.displayName || user.username).slice(0, 2).toUpperCase()}
+   702→            </span>
+   703→            <div className="min-w-0 flex-1">
+   704→              <p className="text-[13px] text-white font-medium truncate">
+   705→                {user.displayName || user.username}
+   706→              </p>
+   707→              <p className="text-[10.5px] text-[#666] flex items-center gap-1">
+   708→                <Coins className="size-3" /> {user.coins.toLocaleString()}
+   709→                <Flame className="size-3 ml-1" /> {user.streak}
+   710→                <BarChart3 className="size-3 ml-1" /> {user.xp.toLocaleString()}
+   711→              </p>
+   712→            </div>
+   713→            <span
+   714→              className={`size-2 rounded-full ${connected ? "bg-white" : "bg-[#555]"}`}
+   715→              title={connected ? "connected" : "connecting…"}
+   716→            />
+   717→          </div>
+   718→          <div className="flex gap-1 mt-2">
+   719→            <Button
+   720→              size="sm"
+   721→              onClick={() => void claim()}
+   722→              disabled={claimBusy}
+   723→              className="h-7 px-2 flex-1 bg-white text-black hover:bg-[#e0e0e0] text-[11px]"
+   724→            >
+   725→              <Coins className="size-3 mr-1" /> Daily
+   726→            </Button>
+   727→            <Button
+   728→              size="sm"
+   729→              variant="ghost"
+   730→              onClick={() => void doLogout()}
+   731→              aria-label="Log out"
+   732→              className="h-7 px-2 text-[#888] hover:text-white"
+   733→            >
+   734→              <LogOut className="size-3.5" />
+   735→            </Button>
+   736→          </div>
+   737→        </div>
+   738→
+   739→        {/* channels */}
+   740→        <div className="flex-1 overflow-y-auto memphis-scroll p-2">
+   741→          <div className="flex items-center justify-between px-2 py-1">
+   742→            <p className="mono-label">Channels</p>
+   743→            <div className="flex gap-0.5">
+   744→              <button
+   745→                onClick={() => setShowJoinChannel(true)}
+   746→                aria-label="Join private channel with code"
+   747→                className="p-1 text-[#777] hover:text-white"
+   748→              >
+   749→                <Hash className="size-3.5" />
+   750→              </button>
+   751→              <button
+   752→                onClick={() => setShowCreateChannel(true)}
+   753→                aria-label="Create private channel"
+   754→                className="p-1 text-[#777] hover:text-white"
+   755→              >
+   756→                <Plus className="size-3.5" />
+   757→              </button>
+   758→            </div>
+   759→          </div>
+   760→          {channels.map((ch) => (
+   761→            <button
+   762→              key={ch.id}
+   763→              onClick={() => void openChannel(ch)}
+   764→              className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] transition-colors ${
+   765→                room?.type === "channel" && room.id === ch.id
+   766→                  ? "bg-[#141414] text-white"
+   767→                  : "text-[#9a9a9a] hover:bg-[#0d0d0d] hover:text-white"
+   768→              }`}
+   769→            >
+   770→              {ch.isPrivate ? (
+   771→                <Lock className="size-3.5 shrink-0 text-[#666]" />
+   772→              ) : (
+   773→                <Hash className="size-3.5 shrink-0 text-[#666]" />
+   774→              )}
+   775→              <span className="truncate">{ch.name}</span>
+   776→              {ch.locked && <Lock className="size-3 ml-auto text-[#555]" />}
+   777→            </button>
+   778→          ))}
+   779→
+   780→          {/* groups */}
+   781→          {groups.length > 0 && (
+   782→            <>
+   783→              <div className="flex items-center justify-between px-2 py-1 mt-2">
+   784→                <p className="mono-label">Groups</p>
+   785→                <button
+   786→                  onClick={() => setShowCreateGroup(true)}
+   787→                  aria-label="Create group"
+   788→                  className="p-1 text-[#777] hover:text-white"
+   789→                >
+   790→                  <Plus className="size-3.5" />
+   791→                </button>
+   792→              </div>
+   793→              {groups.map((g) => (
+   794→                <button
+   795→                  key={g.id}
+   796→                  onClick={() => void openGroup(g.id, g.name)}
+   797→                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] transition-colors ${
+   798→                    room?.type === "group" && room.key === "g:" + g.id
+   799→                      ? "bg-[#141414] text-white"
+   800→                      : "text-[#9a9a9a] hover:bg-[#0d0d0d] hover:text-white"
+   801→                  }`}
+   802→                >
+   803→                  <GitBranch className="size-3.5 shrink-0 text-[#666]" />
+   804→                  <span className="truncate">{g.name}</span>
+   805→                  <span className="ml-auto text-[10px] text-[#555]">
+   806→                    {g.memberIds.length}
+   807→                  </span>
+   808→                </button>
+   809→              ))}
+   810→            </>
+   811→          )}
+   812→
+   813→          {/* DMs */}
+   814→          {dmList.length > 0 && (
+   815→            <>
+   816→              <p className="mono-label px-2 py-1 mt-2">Direct messages</p>
+   817→              {dmList.map((d) => (
+   818→                <button
+   819→                  key={d.key}
+   820→                  onClick={() => void openDm(d.name)}
+   821→                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] transition-colors ${
+   822→                    room?.type === "dm" && room.key === d.key
+   823→                      ? "bg-[#141414] text-white"
+   824→                      : "text-[#9a9a9a] hover:bg-[#0d0d0d] hover:text-white"
+   825→                  }`}
+   826→                >
+   827→                  <UserRound className="size-3.5 shrink-0 text-[#666]" />
+   828→                  <span className="truncate">{d.name}</span>
+   829→                </button>
+   830→              ))}
+   831→            </>
+   832→          )}
+   833→        </div>
+   834→
+   835→        {/* footer tools */}
+   836→        <div className="p-2 border-t border-[#141414] grid grid-cols-2 gap-1">
+   837→          <Button size="sm" variant="ghost" onClick={() => setShowFriends(true)} className="text-[#999] hover:text-white text-[12px] h-8">
+   838→            <UserPlus className="size-3.5 mr-1" /> Friends
+   839→          </Button>
+   840→          <Button size="sm" variant="ghost" onClick={() => setShowLeaderboard(true)} className="text-[#999] hover:text-white text-[12px] h-8">
+   841→            <Trophy className="size-3.5 mr-1" /> Ranks
+   842→          </Button>
+   843→          <Button size="sm" variant="ghost" onClick={() => setShowSoundboard(true)} className="text-[#999] hover:text-white text-[12px] h-8">
+   844→            <Volume2 className="size-3.5 mr-1" /> Sounds
+   845→          </Button>
+   846→          <Button
+   847→            size="sm"
+   848→            variant="ghost"
+   849→            onClick={() => {
+   850→              setModUser("");
+   851→              setShowMod(true);
+   852→            }}
+   853→            disabled={!isStaff}
+   854→            className="text-[#999] hover:text-white text-[12px] h-8 disabled:opacity-30"
+   855→          >
+   856→            <Shield className="size-3.5 mr-1" /> Mod
+   857→          </Button>
+   858→        </div>
+   859→      </aside>
+   860→
+   861→      {/* main column */}
+   862→      <div className="flex-1 flex flex-col min-w-0">
+   863→        {/* room header */}
+   864→        <div className="border-b border-[#141414] px-4 py-2.5 flex items-center gap-2">
+   865→          {room?.type === "channel" ? (
+   866→            <Hash className="size-4 text-[#777]" />
+   867→          ) : room?.type === "group" ? (
+   868→            <GitBranch className="size-4 text-[#777]" />
+   869→          ) : (
+   870→            <UserRound className="size-4 text-[#777]" />
+   871→          )}
+   872→          <h2 className="text-sm font-semibold text-white truncate">
+   873→            {room?.name ?? "…"}
+   874→          </h2>
+   875→          {currentChannel?.topic && (
+   876→            <p className="text-[12px] text-[#666] truncate hidden sm:block ml-2 border-l border-[#222] pl-2">
+   877→              {currentChannel.topic}
+   878→            </p>
+   879→          )}
+   880→          <span className="ml-auto flex items-center gap-1.5 text-[11px] text-[#777]">
+   881→            <span className="size-1.5 rounded-full bg-white" />
+   882→            {onlineCount} online
+   883→          </span>
+   884→        </div>
+   885→
+   886→        {/* messages */}
+   887→        <div ref={scrollRef} className="flex-1 overflow-y-auto memphis-scroll p-2 sm:p-3">
+   888→          {messages.length === 0 && (
+   889→            <p className="text-[13px] text-[#666] text-center mt-8">
+   890→              No messages yet — say hello.
+   891→            </p>
+   892→          )}
+   893→          {messages.map((m) => (
+   894→            <MessageBubble
+   895→              key={m.id}
+   896→              m={m}
+   897→              me={user}
+   898→              onProfile={setProfileUser}
+   899→              onDelete={(id) => void deleteMessage(id)}
+   900→              onVote={(mid, oi) => void votePoll(mid, oi)}
+   901→            />
+   902→          ))}
+   903→          {typing.length > 0 && (
+   904→            <p className="text-[11.5px] text-[#777] px-3 py-1 boot-pulse w-fit">
+   905→              {typing.join(", ")} {typing.length === 1 ? "is" : "are"} typing…
+   906→            </p>
+   907→          )}
+   908→        </div>
+   909→
+   910→        {/* composer */}
+   911→        <div className="border-t border-[#141414] p-2.5 sm:p-3">
+   912→          {currentChannel?.kind === "casino" && (
+   913→            <p className="text-[11px] text-[#666] mb-1.5">
+   914→              Commands: /flip &lt;bet&gt; heads|tails · /slots &lt;bet&gt; · /bal
+   915→            </p>
+   916→          )}
+   917→          <div className="flex gap-2 items-center">
+   918→            {room?.type === "channel" && !currentChannel?.locked && (
+   919→              <Button
+   920→                size="icon"
+   921→                variant="ghost"
+   922→                aria-label="Create poll"
+   923→                onClick={() => setPollOpen(true)}
+   924→                className="text-[#888] hover:text-white shrink-0"
+   925→              >
+   926→                <Vote className="size-4" />
+   927→              </Button>
+   928→            )}
+   929→            <Input
+   930→              value={input}
+   931→              onChange={(e) => onInputChange(e.target.value)}
+   932→              onKeyDown={(e) => e.key === "Enter" && void send()}
+   933→              placeholder={
+   934→                currentChannel?.locked && !isStaff
+   935→                  ? "Channel locked by staff"
+   936→                  : `Message ${room ? (room.type === "channel" ? "#" + room.name : room.name) : "…"}`
+   937→              }
+   938→              disabled={currentChannel?.locked && !isStaff}
+   939→              maxLength={600}
+   940→              aria-label="Chat message"
+   941→              className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] focus-visible:ring-white/30"
+   942→            />
+   943→            <Button
+   944→              onClick={() => void send()}
+   945→              disabled={!input.trim()}
+   946→              aria-label="Send message"
+   947→              className="bg-white text-black hover:bg-[#e0e0e0] shrink-0"
+   948→            >
+   949→              <Send className="size-4" />
+   950→            </Button>
+   951→          </div>
+   952→        </div>
+   953→      </div>
+   954→
+   955→      {/* members */}
+   956→      <aside className="hidden lg:flex flex-col w-48 shrink-0 border-l border-[#141414]">
+   957→        <div className="px-3 py-2.5 border-b border-[#141414]">
+   958→          <p className="mono-label">Online — {onlineCount}</p>
+   959→        </div>
+   960→        <div className="flex-1 overflow-y-auto memphis-scroll p-2">
+   961→          {presence.map((p) => (
+   962→            <button
+   963→              key={p.id}
+   964→              onClick={() => setProfileUser(p.username)}
+   965→              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left hover:bg-[#0d0d0d] group"
+   966→            >
+   967→              <span className="size-1.5 rounded-full bg-white shrink-0" />
+   968→              <span className="text-[12.5px] text-[#c9c9c9] truncate group-hover:text-white">
+   969→                {p.displayName || p.username}
+   970→              </span>
+   971→              {p.role !== "member" && (
+   972→                <span className="ml-auto text-[9px] font-mono uppercase text-[#777]">
+   973→                  {p.role}
+   974→                </span>
+   975→              )}
+   976→            </button>
+   977→          ))}
+   978→        </div>
+   979→      </aside>
+   980→
+   981→      {/* dialogs */}
+   982→      <LeaderboardDialog open={showLeaderboard} onOpenChange={setShowLeaderboard} />
+   983→      <SoundboardDialog open={showSoundboard} onOpenChange={setShowSoundboard} />
+   984→      <FriendsDialog
+   985→        open={showFriends}
+   986→        onOpenChange={setShowFriends}
+   987→        onDm={(u) => void openDm(u)}
+   988→        refreshKey={friendsKey}
+   989→      />
+   990→      <ModDialog
+   991→        open={showMod}
+   992→        onOpenChange={setShowMod}
+   993→        prefillUser={modUser}
+   994→        channels={channels.map((c) => ({ id: c.id, name: c.name }))}
+   995→        myUsername={user.username}
+   996→      />
+   997→      <CreateChannelDialog
+   998→        open={showCreateChannel}
+   999→        onOpenChange={setShowCreateChannel}
+  1000→        onCreated={async (id, name) => {
+  1001→          const s = getSocket();
+  1002→          s?.emit("channels:list", (list: ChannelInfo[]) => setChannels(list));
+  1003→          toast(`Private channel #${name} created`);
+  1004→        }}
+  1005→      />
+  1006→      <JoinChannelDialog
+  1007→        open={showJoinChannel}
+  1008→        onOpenChange={setShowJoinChannel}
+  1009→        onJoined={async (id, name) => {
+  1010→          const s = getSocket();
+  1011→          s?.emit("channels:list", (list: ChannelInfo[]) => setChannels(list));
+  1012→          const ch = await new Promise<ChannelInfo | null>((resolve) => {
+  1013→            s?.emit("channels:list", (list: ChannelInfo[]) => {
+  1014→              resolve(list.find((c) => c.id === id) ?? null);
+  1015→            });
+  1016→          });
+  1017→          if (ch) void openChannel(ch);
+  1018→          toast(`Joined #${name}`);
+  1019→        }}
+  1020→      />
+  1021→      <CreateGroupDialog
+  1022→        open={showCreateGroup}
+  1023→        onOpenChange={setShowCreateGroup}
+  1024→        onCreated={async (key) => {
+  1025→          void emitAck<{ id: string; name: string; memberIds: string[] }[]>("group:list").then(
+  1026→            (r) => {
+  1027→              const d = r as { id: string; name: string; memberIds: string[] }[];
+  1028→              if (Array.isArray(d)) setGroups(d);
+  1029→            }
+  1030→          );
+  1031→        }}
+  1032→      />
+  1033→      <ProfileDialog
+  1034→        username={profileUser}
+  1035→        onClose={() => setProfileUser(null)}
+  1036→        onDm={(u) => void openDm(u)}
+  1037→        onFriend={async (u) => {
+  1038→          const r = await emitAck<{ ok?: boolean; error?: string }>("friends:request", u);
+  1039→          if (r.error) toast.error(r.error);
+  1040→          else toast("Friend request sent");
+  1041→        }}
+  1042→        canModerate={isStaff}
+  1043→        onMod={(u) => {
+  1044→          setModUser(u);
+  1045→          setProfileUser(null);
+  1046→          setShowMod(true);
+  1047→        }}
+  1048→      />
+  1049→
+  1050→      {/* poll creator */}
+  1051→      {pollOpen && (
+  1052→        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+  1053→          <div className="w-full max-w-sm rounded-xl border border-[#1f1f1f] bg-[#080808] p-5">
+  1054→            <h3 className="text-sm font-semibold text-white mb-3">Create poll</h3>
+  1055→            <Input
+  1056→              autoFocus
+  1057→              value={pollQ}
+  1058→              onChange={(e) => setPollQ(e.target.value)}
+  1059→              placeholder="Question"
+  1060→              maxLength={140}
+  1061→              className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555]"
+  1062→            />
+  1063→            <div className="mt-2 space-y-2">
+  1064→              {pollOptions.map((o, i) => (
+  1065→                <Input
+  1066→                  key={i}
+  1067→                  value={o}
+  1068→                  onChange={(e) =>
+  1069→                    setPollOptions((cur) =>
+  1070→                      cur.map((x, j) => (j === i ? e.target.value : x))
+  1071→                    )
+  1072→                  }
+  1073→                  placeholder={`Option ${i + 1}`}
+  1074→                  maxLength={60}
+  1075→                  className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] h-9"
+  1076→                />
+  1077→              ))}
+  1078→              {pollOptions.length < 4 && (
+  1079→                <Button
+  1080→                  size="sm"
+  1081→                  variant="ghost"
+  1082→                  onClick={() => setPollOptions((cur) => [...cur, ""])}
+  1083→                  className="text-[#888] hover:text-white"
+  1084→                >
+  1085→                  <Plus className="size-3.5 mr-1" /> Add option
+  1086→                </Button>
+  1087→              )}
+  1088→            </div>
+  1089→            <label className="text-[12px] text-[#888] flex items-center gap-2 mt-3">
+  1090→              Duration
+  1091→              <select
+  1092→                value={pollMinutes}
+  1093→                onChange={(e) => setPollMinutes(Number(e.target.value))}
+  1094→                className="bg-[#0a0a0a] border border-[#1f1f1f] rounded px-2 py-1 text-white"
+  1095→              >
+  1096→                {[5, 15, 60, 240, 1440].map((m) => (
+  1097→                  <option key={m} value={m}>
+  1098→                    {m >= 60 ? `${m / 60}h` : `${m}m`}
+  1099→                  </option>
+  1100→                ))}
+  1101→              </select>
+  1102→            </label>
+  1103→            <div className="flex justify-end gap-2 mt-4">
+  1104→              <Button variant="ghost" onClick={() => setPollOpen(false)} className="text-[#999] hover:text-white">
+  1105→                Cancel
+  1106→              </Button>
+  1107→              <Button
+  1108→                onClick={() => void createPoll()}
+  1109→                disabled={!pollQ.trim() || pollOptions.filter((o) => o.trim()).length < 2}
+  1110→                className="bg-white text-black hover:bg-[#e0e0e0]"
+  1111→              >
+  1112→                Create
+  1113→              </Button>
+  1114→            </div>
+  1115→          </div>
+  1116→        </div>
+  1117→      )}
+  1118→    </div>
+  1119→  );
+  1120→}
+  1121→

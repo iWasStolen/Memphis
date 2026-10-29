@@ -401,7 +401,7 @@ export default function ChatView() {
   /* claim */
   const [claimBusy, setClaimBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTypingEmit = useRef(0);
   const joinedRef = useRef<string | null>(null);
 
   const isStaff = !!user && ["owner", "admin", "mod"].includes(user.role);
@@ -532,12 +532,22 @@ export default function ChatView() {
   }
 
   /* ---------- join room ---------- */
+  /* leave the previous room (channel or dm/group) so its events stop
+     arriving after switching — dm rooms previously leaked forever */
+  const leaveRoom = (r: Room | null) => {
+    const s = getSocket();
+    if (!s || !r) return;
+    if (r.type === "channel") s.emit("chat:leave", r.id);
+    else s.emit("dm:leave", r.key);
+  };
+
   const openChannel = useCallback(async (ch: ChannelInfo) => {
-    setRoom({ type: "channel", id: ch.id, name: ch.name });
+    setRoom((prev) => {
+      leaveRoom(prev);
+      return { type: "channel", id: ch.id, name: ch.name };
+    });
     const s = getSocket();
     if (!s) return;
-    if (joinedRef.current?.startsWith("ch:")) s.emit("chat:leave", joinedRef.current.slice(3));
-    if (joinedRef.current?.startsWith("dm:")) s.emit("dm:join", ""); /* leave handled by server rooms */
     s.emit("chat:join", ch.id, (res: { messages?: ChatMessage[]; error?: string }) => {
       if (res.error) {
         toast.error(res.error);
@@ -559,7 +569,10 @@ export default function ChatView() {
       toast.error(r.error || "Could not open DM");
       return;
     }
-    setRoom({ type: "dm", key: r.key, name: r.target.username });
+    setRoom((prev) => {
+      leaveRoom(prev);
+      return { type: "dm", key: r.key, name: r.target.username };
+    });
     setMessages(r.messages ?? []);
     setDmList((cur) =>
       cur.find((d) => d.key === r.key)
@@ -581,7 +594,10 @@ export default function ChatView() {
       toast.error(r.error || "Could not open group");
       return;
     }
-    setRoom({ type: "group", key: r.key, name });
+    setRoom((prev) => {
+      leaveRoom(prev);
+      return { type: "group", key: r.key, name };
+    });
     setMessages(r.messages ?? []);
   }, []);
 
@@ -611,10 +627,10 @@ export default function ChatView() {
     setInput(v);
     if (room?.type === "channel") {
       const s = getSocket();
-      if (s && (!typingTimer.current || Date.now() - 0 > 0)) {
+      /* throttle typing pings to one per 1.2s while typing */
+      if (s && Date.now() - lastTypingEmit.current > 1200) {
+        lastTypingEmit.current = Date.now();
         s.emit("chat:typing", room.id);
-        if (typingTimer.current) clearTimeout(typingTimer.current);
-        typingTimer.current = setTimeout(() => {}, 1200);
       }
     }
   };

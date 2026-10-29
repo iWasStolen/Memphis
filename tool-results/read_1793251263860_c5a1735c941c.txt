@@ -1,0 +1,903 @@
+     1→"use client";
+     2→
+     3→/* ============================================================
+     4→   Chat panels: leaderboard, profile, mod tools, soundboard
+     5→   ============================================================ */
+     6→
+     7→import { useCallback, useEffect, useRef, useState } from "react";
+     8→import { emitAck } from "@/lib/socket";
+     9→import { ChatUserSummary } from "@/lib/types";
+    10→import { Button } from "@/components/ui/button";
+    11→import { Input } from "@/components/ui/input";
+    12→import { Textarea } from "@/components/ui/textarea";
+    13→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    14→import {
+    15→  Dialog,
+    16→  DialogContent,
+    17→  DialogDescription,
+    18→  DialogHeader,
+    19→  DialogTitle,
+    20→} from "@/components/ui/dialog";
+    21→import { toast } from "sonner";
+    22→import {
+    23→  Trophy,
+    24→  Shield,
+    25→  Volume2,
+    26→  UserRound,
+    27→  MessageSquare,
+    28→  Ban,
+    29→  VolumeX,
+    30→  Lock,
+    31→  Eraser,
+    32→  ScrollText,
+    33→  UserPlus,
+    34→  UserMinus,
+    35→} from "lucide-react";
+    36→
+    37→/* ---------------- leaderboard ---------------- */
+    38→
+    39→interface LeaderRow {
+    40→  username: string;
+    41→  displayName: string | null;
+    42→  score: number;
+    43→}
+    44→
+    45→export function LeaderboardDialog({
+    46→  open,
+    47→  onOpenChange,
+    48→}: {
+    49→  open: boolean;
+    50→  onOpenChange: (o: boolean) => void;
+    51→}) {
+    52→  const [mode, setMode] = useState("xp");
+    53→  const [rows, setRows] = useState<LeaderRow[]>([]);
+    54→
+    55→  useEffect(() => {
+    56→    if (!open) return;
+    57→    void emitAck<LeaderRow[]>("leaderboard", mode).then((r) => {
+    58→      const data = r as LeaderRow[];
+    59→      if (Array.isArray(data)) setRows(data);
+    60→    });
+    61→  }, [open, mode]);
+    62→
+    63→  return (
+    64→    <Dialog open={open} onOpenChange={onOpenChange}>
+    65→      <DialogContent className="bg-[#050505] border-[#1f1f1f] text-white max-w-sm">
+    66→        <DialogHeader>
+    67→          <DialogTitle className="flex items-center gap-2 text-base">
+    68→            <Trophy className="size-4" /> Leaderboard
+    69→          </DialogTitle>
+    70→          <DialogDescription className="text-xs text-[#7a7a7a]">
+    71→            Top members of the study group.
+    72→          </DialogDescription>
+    73→        </DialogHeader>
+    74→        <Tabs value={mode} onValueChange={setMode}>
+    75→          <TabsList className="bg-[#0a0a0a] border border-[#1a1a1a w-full">
+    76→            {["xp", "coins", "msgs", "streak"].map((m) => (
+    77→              <TabsTrigger
+    78→                key={m}
+    79→                value={m}
+    80→                className="flex-1 data-[state=active]:bg-white data-[state=active]:text-black text-[#999] capitalize"
+    81→              >
+    82→                {m === "msgs" ? "messages" : m}
+    83→              </TabsTrigger>
+    84→            ))}
+    85→          </TabsList>
+    86→          <TabsContent value={mode} className="mt-0">
+    87→            <ol className="divide-y divide-[#141414] max-h-72 overflow-y-auto memphis-scroll">
+    88→              {rows.length === 0 && (
+    89→                <li className="py-3 text-[13px] text-[#666]">No data yet.</li>
+    90→              )}
+    91→              {rows.map((r, i) => (
+    92→                <li key={r.username} className="flex items-center gap-3 py-2">
+    93→                  <span className="w-6 text-right font-mono text-[12px] text-[#666]">
+    94→                    {i + 1}
+    95→                  </span>
+    96→                  <span className="flex-1 text-[13px] text-white truncate">
+    97→                    {r.displayName || r.username}
+    98→                  </span>
+    99→                  <span className="font-mono text-[13px] text-[#c9c9c9]">
+   100→                    {r.score.toLocaleString()}
+   101→                  </span>
+   102→                </li>
+   103→              ))}
+   104→            </ol>
+   105→          </TabsContent>
+   106→        </Tabs>
+   107→      </DialogContent>
+   108→    </Dialog>
+   109→  );
+   110→}
+   111→
+   112→/* ---------------- profile ---------------- */
+   113→
+   114→export function ProfileDialog({
+   115→  username,
+   116→  onClose,
+   117→  onDm,
+   118→  onFriend,
+   119→  canModerate,
+   120→  onMod,
+   121→  friendState,
+   122→}: {
+   123→  username: string | null;
+   124→  onClose: () => void;
+   125→  onDm: (u: string) => void;
+   126→  onFriend: (u: string) => void;
+   127→  canModerate: boolean;
+   128→  onMod: (u: string) => void;
+   129→  friendState?: "none" | "friends" | "pending" | "self";
+   130→}) {
+   131→  const [info, setInfo] = useState<{
+   132→    user: ChatUserSummary & { bio?: string; xp?: number; coins?: number; streak?: number; role?: string };
+   133→    messages: number;
+   134→  } | null>(null);
+   135→
+   136→  useEffect(() => {
+   137→    if (!username) return;
+   138→    setInfo(null);
+   139→    void emitAck<{
+   140→      user: ChatUserSummary & { bio?: string; xp?: number; coins?: number; streak?: number; role?: string };
+   141→      messages: number;
+   142→    }>("profile:get", username).then((r) => {
+   143→      const d = r as typeof info;
+   144→      if (d && d.user) setInfo(d);
+   145→    });
+   146→  }, [username]);
+   147→
+   148→  const u = info?.user;
+   149→
+   150→  return (
+   151→    <Dialog open={!!username} onOpenChange={(o) => !o && onClose()}>
+   152→      <DialogContent className="bg-[#050505] border-[#1f1f1f] text-white max-w-sm">
+   153→        <DialogHeader>
+   154→          <DialogTitle className="flex items-center gap-2 text-base">
+   155→            <UserRound className="size-4" /> {username}
+   156→          </DialogTitle>
+   157→          {u?.role && u.role !== "member" && (
+   158→            <DialogDescription className="text-[11px] font-mono uppercase">
+   159→              {u.role}
+   160→            </DialogDescription>
+   161→          )}
+   162→        </DialogHeader>
+   163→        {!u ? (
+   164→          <p className="text-[13px] text-[#666] py-4 boot-pulse w-fit">loading…</p>
+   165→        ) : (
+   166→          <div className="space-y-3">
+   167→            <div className="grid grid-cols-4 gap-2 text-center">
+   168→              {[
+   169→                ["XP", u.xp ?? 0],
+   170→                ["Coins", u.coins ?? 0],
+   171→                ["Msgs", info?.messages ?? 0],
+   172→                ["Streak", u.streak ?? 0],
+   173→              ].map(([label, val]) => (
+   174→                <div key={String(label)} className="border border-[#1a1a1a] rounded-md p-2">
+   175→                  <div className="font-mono text-[13px] text-white">
+   176→                    {Number(val).toLocaleString()}
+   177→                  </div>
+   178→                  <div className="text-[10px] text-[#666] uppercase tracking-wide">
+   179→                    {label}
+   180→                  </div>
+   181→                </div>
+   182→              ))}
+   183→            </div>
+   184→            {u.status && (
+   185→              <p className="text-[12px] text-[#8f8f8f]">
+   186→                <span className="text-[#666]">status:</span> {u.status}
+   187→              </p>
+   188→            )}
+   189→            {u.bio && <p className="text-[13px] text-[#c9c9c9]">{u.bio}</p>}
+   190→            <div className="flex flex-wrap gap-2">
+   191→              {friendState !== "self" && (
+   192→                <Button
+   193→                  size="sm"
+   194→                  onClick={() => onDm(u.username)}
+   195→                  className="bg-white text-black hover:bg-[#e0e0e0]"
+   196→                >
+   197→                  <MessageSquare className="size-3.5 mr-1" /> Message
+   198→                </Button>
+   199→              )}
+   200→              {(friendState === "none" || friendState === undefined) && (
+   201→                <Button
+   202→                  size="sm"
+   203→                  variant="outline"
+   204→                  onClick={() => onFriend(u.username)}
+   205→                  className="border-[#2a2a2a] text-white hover:bg-[#101010]"
+   206→                >
+   207→                  <UserPlus className="size-3.5 mr-1" /> Add friend
+   208→                </Button>
+   209→              )}
+   210→              {canModerate && (
+   211→                <Button
+   212→                  size="sm"
+   213→                  variant="outline"
+   214→                  onClick={() => onMod(u.username)}
+   215→                  className="border-[#2a2a2a] text-white hover:bg-[#101010]"
+   216→                >
+   217→                  <Shield className="size-3.5 mr-1" /> Moderate
+   218→                </Button>
+   219→              )}
+   220→            </div>
+   221→          </div>
+   222→        )}
+   223→      </DialogContent>
+   224→    </Dialog>
+   225→  );
+   226→}
+   227→
+   228→/* ---------------- mod tools ---------------- */
+   229→
+   230→interface AuditRow {
+   231→  id: string;
+   232→  actorId: string;
+   233→  targetId: string | null;
+   234→  action: string;
+   235→  reason: string;
+   236→  createdAt: number;
+   237→}
+   238→
+   239→export function ModDialog({
+   240→  open,
+   241→  onOpenChange,
+   242→  prefillUser,
+   243→  channels,
+   244→  myUsername,
+   245→}: {
+   246→  open: boolean;
+   247→  onOpenChange: (o: boolean) => void;
+   248→  prefillUser: string;
+   249→  channels: { id: string; name: string }[];
+   250→  myUsername: string;
+   251→}) {
+   252→  const [target, setTarget] = useState("");
+   253→  const [seconds, setSeconds] = useState(600);
+   254→  const [reason, setReason] = useState("");
+   255→  const [audit, setAudit] = useState<AuditRow[]>([]);
+   256→  const [restrictions, setRestrictions] = useState<{
+   257→    banned: { username: string; banReason: string | null }[];
+   258→    muted: { username: string; mutedUntil: number }[];
+   259→  } | null>(null);
+   260→  const [wordFilter, setWordFilter] = useState("");
+   261→  const [tab, setTab] = useState("actions");
+   262→
+   263→  useEffect(() => {
+   264→    if (open && prefillUser) setTarget(prefillUser);
+   265→  }, [open, prefillUser]);
+   266→
+   267→  useEffect(() => {
+   268→    if (!open) return;
+   269→    void emitAck<AuditRow[]>("mod:audit").then((r) => {
+   270→      const d = r as AuditRow[];
+   271→      if (Array.isArray(d)) setAudit(d);
+   272→    });
+   273→    void emitAck<typeof restrictions>("mod:restrictions").then((r) => {
+   274→      const d = r as typeof restrictions;
+   275→      if (d && !("error" in d)) setRestrictions(d);
+   276→    });
+   277→  }, [open]);
+   278→
+   279→  const act = useCallback(
+   280→    async (action: string, opts: { seconds?: number; reason?: string; value?: string } = {}) => {
+   281→      const r = await emitAck<{ ok?: boolean; error?: string; settings?: { wordFilter?: string } }>(
+   282→        "mod:action",
+   283→        { action, target: target || undefined, ...opts }
+   284→      );
+   285→      if (r.error) toast.error(r.error);
+   286→      else {
+   287→        toast.success(`${action} done`);
+   288→        if (action === "settings" && r.settings?.wordFilter !== undefined)
+   289→          setWordFilter(r.settings.wordFilter);
+   290→      }
+   291→    },
+   292→    [target]
+   293→  );
+   294→
+   295→  return (
+   296→    <Dialog open={open} onOpenChange={onOpenChange}>
+   297→      <DialogContent className="bg-[#050505] border-[#1f1f1f] text-white max-w-lg">
+   298→        <DialogHeader>
+   299→          <DialogTitle className="flex items-center gap-2 text-base">
+   300→            <Shield className="size-4" /> Moderation
+   301→          </DialogTitle>
+   302→          <DialogDescription className="text-xs text-[#7a7a7a]">
+   303→            Signed in as {myUsername}. Actions are logged.
+   304→          </DialogDescription>
+   305→        </DialogHeader>
+   306→        <Tabs value={tab} onValueChange={setTab}>
+   307→          <TabsList className="bg-[#0a0a0a] border border-[#1a1a1a w-full">
+   308→            <TabsTrigger value="actions" className="flex-1 data-[state=active]:bg-white data-[state=active]:text-black text-[#999]">
+   309→              Actions
+   310→            </TabsTrigger>
+   311→            <TabsTrigger value="channels" className="flex-1 data-[state=active]:bg-white data-[state=active]:text-black text-[#999]">
+   312→              Channels
+   313→            </TabsTrigger>
+   314→            <TabsTrigger value="log" className="flex-1 data-[state=active]:bg-white data-[state=active]:text-black text-[#999]">
+   315→              Log
+   316→            </TabsTrigger>
+   317→          </TabsList>
+   318→
+   319→          <TabsContent value="actions" className="space-y-3 mt-3">
+   320→            <Input
+   321→              value={target}
+   322→              onChange={(e) => setTarget(e.target.value)}
+   323→              placeholder="Target username"
+   324→              aria-label="Target username"
+   325→              className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555]"
+   326→            />
+   327→            <div className="grid grid-cols-2 gap-2">
+   328→              <Input
+   329→                type="number"
+   330→                value={seconds}
+   331→                onChange={(e) => setSeconds(Number(e.target.value) || 0)}
+   332→                aria-label="Duration in seconds"
+   333→                className="bg-[#050505] border-[#1f1f1f] text-white"
+   334→              />
+   335→              <Input
+   336→                value={reason}
+   337→                onChange={(e) => setReason(e.target.value)}
+   338→                placeholder="Reason (optional)"
+   339→                aria-label="Reason"
+   340→                className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555]"
+   341→              />
+   342→            </div>
+   343→            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+   344→              <Button size="sm" variant="outline" onClick={() => void act("mute", { seconds, reason })} className="border-[#2a2a2a] text-white hover:bg-[#101010]">
+   345→                <VolumeX className="size-3.5 mr-1" /> Mute
+   346→              </Button>
+   347→              <Button size="sm" variant="outline" onClick={() => void act("unmute")} className="border-[#2a2a2a] text-white hover:bg-[#101010]">
+   348→                Unmute
+   349→              </Button>
+   350→              <Button size="sm" variant="outline" onClick={() => void act("warn", { reason })} className="border-[#2a2a2a] text-white hover:bg-[#101010]">
+   351→                Warn
+   352→              </Button>
+   353→              <Button size="sm" variant="outline" onClick={() => void act("ban", { reason })} className="border-[#2a2a2a] text-white hover:bg-[#101010]">
+   354→                <Ban className="size-3.5 mr-1" /> Ban
+   355→              </Button>
+   356→              <Button size="sm" variant="outline" onClick={() => void act("unban")} className="border-[#2a2a2a] text-white hover:bg-[#101010]">
+   357→                Unban
+   358→              </Button>
+   359→              <Button size="sm" variant="outline" onClick={() => void act("role", { value: "mod" })} className="border-[#2a2a2a] text-white hover:bg-[#101010]">
+   360→                <UserPlus className="size-3.5 mr-1" /> Make mod
+   361→              </Button>
+   362→              <Button size="sm" variant="outline" onClick={() => void act("role", { value: "member" })} className="border-[#2a2a2a] text-white hover:bg-[#101010]">
+   363→                <UserMinus className="size-3.5 mr-1" /> Demote
+   364→              </Button>
+   365→            </div>
+   366→            <div className="border-t border-[#141414] pt-3 space-y-2">
+   367→              <p className="mono-label">Auto-mod</p>
+   368→              <div className="flex gap-2">
+   369→                <Input
+   370→                  value={wordFilter}
+   371→                  onChange={(e) => setWordFilter(e.target.value)}
+   372→                  placeholder="Word filter (comma separated)"
+   373→                  aria-label="Word filter"
+   374→                  className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555]"
+   375→                />
+   376→                <Button size="sm" variant="outline" onClick={() => void act("settings", { value: wordFilter })} className="border-[#2a2a2a] text-white hover:bg-[#101010] shrink-0">
+   377→                  Save
+   378→                </Button>
+   379→              </div>
+   380→              <div className="flex gap-2">
+   381→                <Button size="sm" variant="outline" onClick={() => void act("settings", { seconds: 1 })} className="border-[#2a2a2a] text-white hover:bg-[#101010]">
+   382→                  Auto-mod ON
+   383→                </Button>
+   384→                <Button size="sm" variant="outline" onClick={() => void act("settings", { seconds: 0 })} className="border-[#2a2a2a] text-white hover:bg-[#101010]">
+   385→                  Auto-mod OFF
+   386→                </Button>
+   387→                <Button size="sm" variant="outline" onClick={() => void act("registrations")} className="border-[#2a2a2a] text-white hover:bg-[#101010]">
+   388→                  Toggle sign-ups
+   389→                </Button>
+   390→              </div>
+   391→            </div>
+   392→            {restrictions && (
+   393→              <div className="border-t border-[#141414] pt-3 text-[12px] text-[#888]">
+   394→                <p className="mono-label mb-1">Restrictions</p>
+   395→                {restrictions.banned.length > 0 && (
+   396→                  <p>
+   397→                    banned: {restrictions.banned.map((b) => b.username).join(", ")}
+   398→                  </p>
+   399→                )}
+   400→                {restrictions.muted.length > 0 && (
+   401→                  <p>
+   402→                    muted:{" "}
+   403→                    {restrictions.muted
+   404→                      .map((m) => `${m.username} (${Math.max(0, Math.round((m.mutedUntil - Date.now()) / 60000))}m)`)
+   405→                      .join(", ")}
+   406→                  </p>
+   407→                )}
+   408→                {restrictions.banned.length === 0 && restrictions.muted.length === 0 && (
+   409→                  <p>none</p>
+   410→                )}
+   411→              </div>
+   412→            )}
+   413→          </TabsContent>
+   414→
+   415→          <TabsContent value="channels" className="space-y-2 mt-3">
+   416→            {channels.map((ch) => (
+   417→              <div
+   418→                key={ch.id}
+   419→                className="flex items-center gap-2 border border-[#161616] rounded-md px-2.5 py-2"
+   420→              >
+   421→                <span className="text-[13px] text-white flex-1">#{ch.name}</span>
+   422→                <Button size="sm" variant="ghost" onClick={() => void act("lockChannel", { value: ch.id })} className="text-[#999] hover:text-white h-7 px-2">
+   423→                  <Lock className="size-3.5" /> Lock
+   424→                </Button>
+   425→                <Button size="sm" variant="ghost" onClick={() => void act("unlockChannel", { value: ch.id })} className="text-[#999] hover:text-white h-7 px-2">
+   426→                  Unlock
+   427→                </Button>
+   428→                <Button size="sm" variant="ghost" onClick={() => void act("clearChannel", { value: ch.id })} className="text-[#999] hover:text-white h-7 px-2">
+   429→                  <Eraser className="size-3.5" /> Clear
+   430→                </Button>
+   431→              </div>
+   432→            ))}
+   433→          </TabsContent>
+   434→
+   435→          <TabsContent value="log" className="mt-3">
+   436→            <div className="max-h-64 overflow-y-auto memphis-scroll text-[12px] space-y-1">
+   437→              {audit.length === 0 && <p className="text-[#666]">No actions logged.</p>}
+   438→              {audit.map((a) => (
+   439→                <div key={a.id} className="flex gap-2 text-[#999]">
+   440→                  <span className="text-[#555] font-mono shrink-0">
+   441→                    {new Date(a.createdAt).toLocaleTimeString()}
+   442→                  </span>
+   443→                  <span>
+   444→                    <span className="text-white">{a.actorId}</span> → {a.action}
+   445→                    {a.targetId ? ` on @${a.targetId}` : ""}
+   446→                    {a.reason ? ` (${a.reason})` : ""}
+   447→                  </span>
+   448→                </div>
+   449→              ))}
+   450→            </div>
+   451→          </TabsContent>
+   452→        </Tabs>
+   453→      </DialogContent>
+   454→    </Dialog>
+   455→  );
+   456→}
+   457→
+   458→/* ---------------- soundboard ---------------- */
+   459→
+   460→const SOUNDS: { id: string; label: string; freqs: number[]; type: OscillatorType; dur: number }[] = [
+   461→  { id: "ding", label: "ding", freqs: [880], type: "sine", dur: 0.4 },
+   462→  { id: "buzz", label: "buzz", freqs: [110], type: "sawtooth", dur: 0.5 },
+   463→  { id: "blip", label: "blip", freqs: [660, 990], type: "square", dur: 0.18 },
+   464→  { id: "tada", label: "tada", freqs: [523, 659, 784, 1047], type: "triangle", dur: 0.7 },
+   465→  { id: "boom", label: "boom", freqs: [60], type: "sine", dur: 0.8 },
+   466→  { id: "ping", label: "ping", freqs: [1318], type: "sine", dur: 0.3 },
+   467→];
+   468→
+   469→export function playLocalSound(id: string) {
+   470→  const def = SOUNDS.find((s) => s.id === id);
+   471→  if (!def) return;
+   472→  try {
+   473→    const AC =
+   474→      window.AudioContext ||
+   475→      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+   476→    const ctx = new AC();
+   477→    let t = ctx.currentTime;
+   478→    for (const f of def.freqs) {
+   479→      const osc = ctx.createOscillator();
+   480→      const g = ctx.createGain();
+   481→      osc.type = def.type;
+   482→      osc.frequency.value = f;
+   483→      g.gain.setValueAtTime(0.18, t);
+   484→      g.gain.exponentialRampToValueAtTime(0.001, t + def.dur);
+   485→      osc.connect(g).connect(ctx.destination);
+   486→      osc.start(t);
+   487→      osc.stop(t + def.dur + 0.02);
+   488→      t += def.dur / def.freqs.length;
+   489→    }
+   490→    setTimeout(() => void ctx.close(), (def.dur + 0.3) * 1000);
+   491→  } catch {
+   492→    /* audio unavailable */
+   493→  }
+   494→}
+   495→
+   496→export function SoundboardDialog({
+   497→  open,
+   498→  onOpenChange,
+   499→}: {
+   500→  open: boolean;
+   501→  onOpenChange: (o: boolean) => void;
+   502→}) {
+   503→  return (
+   504→    <Dialog open={open} onOpenChange={onOpenChange}>
+   505→      <DialogContent className="bg-[#050505] border-[#1f1f1f] text-white max-w-xs">
+   506→        <DialogHeader>
+   507→          <DialogTitle className="flex items-center gap-2 text-base">
+   508→            <Volume2 className="size-4" /> Soundboard
+   509→          </DialogTitle>
+   510→          <DialogDescription className="text-xs text-[#7a7a7a]">
+   511→            Plays for everyone in chat.
+   512→          </DialogDescription>
+   513→        </DialogHeader>
+   514→        <div className="grid grid-cols-3 gap-2">
+   515→          {SOUNDS.map((s) => (
+   516→            <button
+   517→              key={s.id}
+   518→              onClick={() => {
+   519→                playLocalSound(s.id);
+   520→                void emitAck("sound:play", s.id);
+   521→              }}
+   522→              className="border border-[#1f1f1f] rounded-md py-2.5 text-[12px] text-[#ccc] hover:border-white hover:text-white transition-colors"
+   523→            >
+   524→              {s.label}
+   525→            </button>
+   526→          ))}
+   527→        </div>
+   528→      </DialogContent>
+   529→    </Dialog>
+   530→  );
+   531→}
+   532→
+   533→/* ---------------- friends dialog ---------------- */
+   534→
+   535→interface FriendRow {
+   536→  id: string;
+   537→  status: string;
+   538→  user: { id: string; username: string; displayName: string | null; status: string } | null;
+   539→}
+   540→
+   541→export function FriendsDialog({
+   542→  open,
+   543→  onOpenChange,
+   544→  onDm,
+   545→  refreshKey,
+   546→}: {
+   547→  open: boolean;
+   548→  onOpenChange: (o: boolean) => void;
+   549→  onDm: (u: string) => void;
+   550→  refreshKey: number;
+   551→}) {
+   552→  const [rows, setRows] = useState<FriendRow[]>([]);
+   553→  const [addName, setAddName] = useState("");
+   554→  const [msg, setMsg] = useState("");
+   555→
+   556→  const load = useCallback(() => {
+   557→    void emitAck<FriendRow[]>("friends:list").then((r) => {
+   558→      const d = r as FriendRow[];
+   559→      if (Array.isArray(d)) setRows(d);
+   560→    });
+   561→  }, []);
+   562→
+   563→  useEffect(() => {
+   564→    if (open) load();
+   565→  }, [open, load, refreshKey]);
+   566→
+   567→  const friends = rows.filter((r) => r.status === "accepted");
+   568→  const incoming = rows.filter((r) => r.status === "pending" && r.user?.id);
+   569→  const sent = rows.filter((r) => r.status === "pending" && !r.user);
+   570→
+   571→  const request = async () => {
+   572→    const name = addName.trim();
+   573→    if (!name) return;
+   574→    const r = await emitAck<{ ok?: boolean; error?: string }>("friends:request", name);
+   575→    if (r.error) setMsg(r.error);
+   576→    else {
+   577→      setMsg("Request sent.");
+   578→      setAddName("");
+   579→      load();
+   580→    }
+   581→    setTimeout(() => setMsg(""), 2500);
+   582→  };
+   583→
+   584→  const respond = async (id: string, accept: boolean) => {
+   585→    await emitAck("friends:respond", { id, accept });
+   586→    load();
+   587→  };
+   588→
+   589→  const remove = async (id: string) => {
+   590→    await emitAck("friends:remove", id);
+   591→    load();
+   592→  };
+   593→
+   594→  const Row = ({ r, pending }: { r: FriendRow; pending?: boolean }) => (
+   595→    <div className="flex items-center gap-2 py-1.5">
+   596→      <span className="size-1.5 rounded-full bg-white shrink-0" aria-hidden />
+   597→      <span className="text-[13px] text-white truncate flex-1">
+   598→        {r.user ? r.user.displayName || r.user.username : "unknown"}
+   599→      </span>
+   600→      {pending ? (
+   601→        <>
+   602→          <Button size="sm" variant="outline" onClick={() => void respond(r.id, true)} className="h-7 px-2 border-[#2a2a2a] text-white hover:bg-[#101010]">
+   603→            Accept
+   604→          </Button>
+   605→          <Button size="sm" variant="ghost" onClick={() => void respond(r.id, false)} className="h-7 px-2 text-[#888] hover:text-white">
+   606→            Decline
+   607→          </Button>
+   608→        </>
+   609→      ) : (
+   610→        <>
+   611→          <Button size="sm" variant="ghost" onClick={() => r.user && onDm(r.user.username)} className="h-7 px-2 text-[#999] hover:text-white">
+   612→            <MessageSquare className="size-3.5" />
+   613→          </Button>
+   614→          <Button size="sm" variant="ghost" aria-label="Remove friend" onClick={() => void remove(r.id)} className="h-7 px-2 text-[#888] hover:text-white">
+   615→            <UserMinus className="size-3.5" />
+   616→          </Button>
+   617→        </>
+   618→      )}
+   619→    </div>
+   620→  );
+   621→
+   622→  return (
+   623→    <Dialog open={open} onOpenChange={onOpenChange}>
+   624→      <DialogContent className="bg-[#050505] border-[#1f1f1f] text-white max-w-sm">
+   625→        <DialogHeader>
+   626→          <DialogTitle className="flex items-center gap-2 text-base">
+   627→            <UserPlus className="size-4" /> Friends
+   628→          </DialogTitle>
+   629→          <DialogDescription className="text-xs text-[#7a7a7a]">
+   630→            Add friends to DM them more easily.
+   631→          </DialogDescription>
+   632→        </DialogHeader>
+   633→        <div className="flex gap-2">
+   634→          <Input
+   635→            value={addName}
+   636→            onChange={(e) => setAddName(e.target.value)}
+   637→            onKeyDown={(e) => e.key === "Enter" && void request()}
+   638→            placeholder="Username"
+   639→            aria-label="Friend username"
+   640→            className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555]"
+   641→          />
+   642→          <Button onClick={() => void request()} size="sm" className="bg-white text-black hover:bg-[#e0e0e0] shrink-0">
+   643→            Add
+   644→          </Button>
+   645→        </div>
+   646→        {msg && <p className="text-[12px] text-[#999]">{msg}</p>}
+   647→        {incoming.length > 0 && (
+   648→          <section>
+   649→            <p className="mono-label mb-1">Requests ({incoming.length})</p>
+   650→            {incoming.map((r) => (
+   651→              <Row key={r.id} r={r} pending />
+   652→            ))}
+   653→          </section>
+   654→        )}
+   655→        {sent.length > 0 && (
+   656→          <section>
+   657→            <p className="mono-label mb-1">Sent</p>
+   658→            {sent.map((r) => (
+   659→              <div key={r.id} className="flex items-center gap-2 py-1.5">
+   660→                <span className="size-1.5 rounded-full border border-[#555] shrink-0" aria-hidden />
+   661→                <span className="text-[13px] text-[#999] flex-1">pending…</span>
+   662→              </div>
+   663→            ))}
+   664→          </section>
+   665→        )}
+   666→        <section>
+   667→          <p className="mono-label mb-1">Friends ({friends.length})</p>
+   668→          {friends.length === 0 && (
+   669→            <p className="text-[13px] text-[#666]">No friends added yet.</p>
+   670→          )}
+   671→          {friends.map((r) => (
+   672→            <Row key={r.id} r={r} />
+   673→          ))}
+   674→        </section>
+   675→      </DialogContent>
+   676→    </Dialog>
+   677→  );
+   678→}
+   679→
+   680→/* ---------------- create private channel ---------------- */
+   681→
+   682→export function CreateChannelDialog({
+   683→  open,
+   684→  onOpenChange,
+   685→  onCreated,
+   686→}: {
+   687→  open: boolean;
+   688→  onOpenChange: (o: boolean) => void;
+   689→  onCreated: (id: string, name: string) => void;
+   690→}) {
+   691→  const [name, setName] = useState("");
+   692→  const [minutes, setMinutes] = useState(60);
+   693→  const [code, setCode] = useState<string | null>(null);
+   694→  const [err, setErr] = useState("");
+   695→
+   696→  const create = async () => {
+   697→    const r = await emitAck<{ ok?: boolean; id?: string; name?: string; code?: string; error?: string }>(
+   698→      "channel:create",
+   699→      { name, minutes }
+   700→    );
+   701→    if (r.error) {
+   702→      setErr(r.error);
+   703→      return;
+   704→    }
+   705→    setCode(r.code ?? null);
+   706→    if (r.id && r.name) onCreated(r.id, r.name);
+   707→  };
+   708→
+   709→  return (
+   710→    <Dialog open={open} onOpenChange={(o) => !o && onOpenChange(false)}>
+   711→      <DialogContent className="bg-[#050505] border-[#1f1f1f] text-white max-w-sm">
+   712→        <DialogHeader>
+   713→          <DialogTitle className="flex items-center gap-2 text-base">
+   714→            <ScrollText className="size-4" /> Private channel
+   715→          </DialogTitle>
+   716→          <DialogDescription className="text-xs text-[#7a7a7a]">
+   717→            Invite-only room with a share code.
+   718→          </DialogDescription>
+   719→        </DialogHeader>
+   720→        {code ? (
+   721→          <div className="space-y-3">
+   722→            <p className="text-[13px] text-[#c9c9c9]">Channel created. Share this code:</p>
+   723→            <p className="text-center text-xl font-mono tracking-[0.3em] text-white border border-[#222] rounded-lg py-3">
+   724→              {code}
+   725→            </p>
+   726→            <Button onClick={() => onOpenChange(false)} className="w-full bg-white text-black hover:bg-[#e0e0e0]">
+   727→              Done
+   728→            </Button>
+   729→          </div>
+   730→        ) : (
+   731→          <div className="space-y-3">
+   732→            <Input
+   733→              value={name}
+   734→              onChange={(e) => setName(e.target.value)}
+   735→              placeholder="channel-name"
+   736→              aria-label="Channel name"
+   737→              className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555]"
+   738→            />
+   739→            <label className="text-[12px] text-[#888] flex items-center gap-2">
+   740→              Expires in
+   741→              <select
+   742→                value={minutes}
+   743→                onChange={(e) => setMinutes(Number(e.target.value))}
+   744→                className="bg-[#0a0a0a] border border-[#1f1f1f] rounded px-2 py-1 text-white"
+   745→                aria-label="Expiration"
+   746→              >
+   747→                <option value={60}>60 minutes</option>
+   748→                <option value={1440}>24 hours</option>
+   749→                <option value={0}>permanent</option>
+   750→              </select>
+   751→            </label>
+   752→            {err && <p className="text-[12px] text-white bg-[#161616] border border-[#333] rounded px-2 py-1">{err}</p>}
+   753→            <Button
+   754→              onClick={() => void create()}
+   755→              disabled={name.trim().length < 3}
+   756→              className="w-full bg-white text-black hover:bg-[#e0e0e0]"
+   757→            >
+   758→              Create
+   759→            </Button>
+   760→          </div>
+   761→        )}
+   762→      </DialogContent>
+   763→    </Dialog>
+   764→  );
+   765→}
+   766→
+   767→/* ---------------- join channel ---------------- */
+   768→
+   769→export function JoinChannelDialog({
+   770→  open,
+   771→  onOpenChange,
+   772→  onJoined,
+   773→}: {
+   774→  open: boolean;
+   775→  onOpenChange: (o: boolean) => void;
+   776→  onJoined: (id: string, name: string) => void;
+   777→}) {
+   778→  const [code, setCode] = useState("");
+   779→  const [err, setErr] = useState("");
+   780→  const inputRef = useRef<HTMLInputElement>(null);
+   781→
+   782→  useEffect(() => {
+   783→    if (open) setTimeout(() => inputRef.current?.focus(), 50);
+   784→  }, [open]);
+   785→
+   786→  const join = async () => {
+   787→    const r = await emitAck<{ ok?: boolean; id?: string; name?: string; error?: string }>(
+   788→      "channel:join",
+   789→      code
+   790→    );
+   791→    if (r.error) {
+   792→      setErr(r.error);
+   793→      return;
+   794→    }
+   795→    setCode("");
+   796→    setErr("");
+   797→    onOpenChange(false);
+   798→    if (r.id && r.name) onJoined(r.id, r.name);
+   799→  };
+   800→
+   801→  return (
+   802→    <Dialog open={open} onOpenChange={onOpenChange}>
+   803→      <DialogContent className="bg-[#050505] border-[#1f1f1f] text-white max-w-xs">
+   804→        <DialogHeader>
+   805→          <DialogTitle className="text-base">Join with code</DialogTitle>
+   806→          <DialogDescription className="text-xs text-[#7a7a7a]">
+   807→            Enter the 6-character invite code.
+   808→          </DialogDescription>
+   809→        </DialogHeader>
+   810→        <Input
+   811→          ref={inputRef}
+   812→          value={code}
+   813→          onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 6))}
+   814→          onKeyDown={(e) => e.key === "Enter" && void join()}
+   815→          placeholder="ABC123"
+   816→          className="text-center font-mono tracking-[0.3em] bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] placeholder:tracking-[0.3em]"
+   817→          aria-label="Invite code"
+   818→        />
+   819→        {err && <p className="text-[12px] text-white bg-[#161616] border border-[#333] rounded px-2 py-1">{err}</p>}
+   820→        <Button
+   821→          onClick={() => void join()}
+   822→          disabled={code.length < 6}
+   823→          className="w-full bg-white text-black hover:bg-[#e0e0e0]"
+   824→        >
+   825→          Join
+   826→        </Button>
+   827→      </DialogContent>
+   828→    </Dialog>
+   829→  );
+   830→}
+   831→
+   832→/* ---------------- group creator ---------------- */
+   833→
+   834→export function CreateGroupDialog({
+   835→  open,
+   836→  onOpenChange,
+   837→  onCreated,
+   838→}: {
+   839→  open: boolean;
+   840→  onOpenChange: (o: boolean) => void;
+   841→  onCreated: (key: string) => void;
+   842→}) {
+   843→  const [name, setName] = useState("");
+   844→  const [usernames, setUsernames] = useState("");
+   845→  const [err, setErr] = useState("");
+   846→
+   847→  const create = async () => {
+   848→    const list = usernames
+   849→      .split(/[,\s]+/)
+   850→      .map((u) => u.trim())
+   851→      .filter(Boolean);
+   852→    const r = await emitAck<{ ok?: boolean; group?: { id: string }; error?: string }>(
+   853→      "group:create",
+   854→      { name, usernames: list }
+   855→    );
+   856→    if (r.error) {
+   857→      setErr(r.error);
+   858→      return;
+   859→    }
+   860→    setErr("");
+   861→    setName("");
+   862→    setUsernames("");
+   863→    onOpenChange(false);
+   864→    if (r.group?.id) onCreated("g:" + r.group.id);
+   865→  };
+   866→
+   867→  return (
+   868→    <Dialog open={open} onOpenChange={onOpenChange}>
+   869→      <DialogContent className="bg-[#050505] border-[#1f1f1f] text-white max-w-sm">
+   870→        <DialogHeader>
+   871→          <DialogTitle className="text-base">New group</DialogTitle>
+   872→          <DialogDescription className="text-xs text-[#7a7a7a]">
+   873→            A private conversation with several members.
+   874→          </DialogDescription>
+   875→        </DialogHeader>
+   876→        <Input
+   877→          value={name}
+   878→          onChange={(e) => setName(e.target.value)}
+   879→          placeholder="Group name"
+   880→          aria-label="Group name"
+   881→          className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555]"
+   882→        />
+   883→        <Textarea
+   884→          value={usernames}
+   885→          onChange={(e) => setUsernames(e.target.value)}
+   886→          placeholder="usernames, comma or space separated"
+   887→          rows={2}
+   888→          aria-label="Member usernames"
+   889→          className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] min-h-0"
+   890→        />
+   891→        {err && <p className="text-[12px] text-white bg-[#161616] border border-[#333] rounded px-2 py-1">{err}</p>}
+   892→        <Button
+   893→          onClick={() => void create()}
+   894→          disabled={!name.trim()}
+   895→          className="bg-white text-black hover:bg-[#e0e0e0]"
+   896→        >
+   897→          Create
+   898→        </Button>
+   899→      </DialogContent>
+   900→    </Dialog>
+   901→  );
+   902→}
+   903→

@@ -70,12 +70,15 @@ export async function POST(req: Request) {
 
   const conversationId = conversation.id;
 
-  /* recent history for context */
-  const history = await db.aIMessage.findMany({
-    where: { conversationId },
-    orderBy: { createdAt: "asc" },
-    take: HISTORY_TURNS,
-  });
+  /* recent history for context — take the NEWEST N messages
+     (desc + take), then restore chronological order for the model */
+  const history = (
+    await db.aIMessage.findMany({
+      where: { conversationId },
+      orderBy: { createdAt: "desc" },
+      take: HISTORY_TURNS,
+    })
+  ).reverse();
 
   const systemMsg = instructions.trim()
     ? `${SYSTEM_BASE}\n\nThe user's custom instructions: ${instructions.trim()}`
