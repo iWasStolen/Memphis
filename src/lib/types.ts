@@ -19,7 +19,7 @@ export const VIEWS: { id: ViewId; label: string; desc: string }[] = [
   { id: "chat", label: "Chat", desc: "Community" },
   { id: "ai", label: "AI", desc: "GLM chat — free, unlimited" },
   { id: "listen", label: "Listen", desc: "Spotify" },
-  { id: "watch", label: "Watch", desc: "YouTube" },
+  { id: "watch", label: "Watch", desc: "Movy movies + YouTube" },
   { id: "browse", label: "Browse", desc: "Scramjet web proxy" },
 ];
 

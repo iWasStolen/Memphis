@@ -238,3 +238,18 @@ Stage Summary:
   3. **Missing type exports** — lib/music-engine.ts imports `TrackDef`, lib/watch.ts imports `WatchItemDef` from lib/types (neither existed); lib/games.ts (dead code, superseded by games-builtin.ts + data/games.json) used `embedUrl` not on `GameDef` → added `TrackDef` (8-style union) + `WatchItemDef` to types.ts, `embedUrl?` legacy alias on GameDef.
 - Verified: `tsc --noEmit` clean, `next build` fully passes (14 API routes), dev server restarted with new client, all 3 watch endpoints live-tested (list comments / view+rate / post comment) then test rows cleaned from DB; / and /api/games (1,574 games) healthy.
 - Lesson: run `npx next build` (not just dev) before publishing — dev's Turbopack lazy type-checking hides schema/type drift.
+
+## Watch → Movy embed session (2026-10-29)
+
+- User request: make Watch embed the same site the tung tung reference (vcsasecrly.365-24-7.de) embeds for its Watch section.
+- Reference reverse-engineered from its JS bundles (downloaded /assets/build/*.js):
+  * Watch section default active tab = "Movy" (data-view="films"), which embeds **https://www.movy.sx/** through the Scramjet/UV engine (FILMS_URL in a273bc5d53.js). movy.sx sends X-Frame-Options: DENY, hence the proxy embed.
+  * presetMovy() pre-seeds sessionStorage `__uv$<origin>@ads-enabled-session=false` + `<host>@ads-enabled-session=false` to skip movy's ad-gate prompt before the frame loads.
+  * Reference also has Movies/Anime tabs (custom TMDB player via /api/mv/* with 7 keyless embed providers: quasar=vidy.st, astro=vidrock.net, pulse=vidlink.pro, nova=videasy.to, orbit=vidfast.pro, orion=vidking.net, flux=vidsrc.su — all take TMDB ids) and a YouTube tab; Movies/Anime need a TMDB API key for catalogs so not replicated.
+- Our Scramjet bundle (public/scram2) scopes proxied sessionStorage as `<host>@<key>` (verified: `e.url.host+"@"+r` in the storage wrapper), so the equivalent preset is `www.movy.sx@ads-enabled-session=false` + `movy.sx@…`.
+- watch-view.tsx rebuilt: tab row (Movy default + YouTube with existing quick links), presetMovy() on Movy-tab activation (useEffect), per-tab footer copy + header mono-label, "Open in Memphis Browser" follows active tab. types.ts nav desc → "Movy movies + YouTube".
+- VERIFIED (agent-browser through Caddy :81 — direct :3000 breaks the wss /wisp/?XTransformPort=3001 transport route, causing black frames; that's the entry-point the preview uses):
+  * Movy tab: full site renders through engine (hero banner, Home/Movies/Shows/Anime nav, 228 interactive elements, movie cards with TMDB hrefs), ad-gate preset confirmed in sessionStorage, movie detail page + player load, Play clicked → poster/intro frame reached (headless autoplay needs gesture — normal).
+  * YouTube tab: renders (logo, search, nav; signed-out landing).
+  * eslint clean, tsc clean, next build passes (14 routes).
+- Untouched backend: /api/watch/* (Archive.org catalog + comments/ratings) stays available for a future native Watch UI.
