@@ -187,3 +187,45 @@ Work Log:
 
 Stage Summary:
 - Proxy engine is now Scramjet v2 (newest, 2.0.67-alpha.2) with live transport switching and no SharedWorker dependency; games are 74 hand-verified popular titles with automated dead-link/spam detection at build time
+
+---
+Task ID: 9
+Agent: main (Z.ai)
+Task: Expand games catalog 74 → 1,574 (over 1k well-known games)
+
+Work Log:
+- Source evaluation (real-browser iframe render tests + header checks):
+  * KBHgames: main pages pass headers BUT run per-game anti-embed JS (modal "can't be embedded on other websites"); /embed endpoint has embeddable:true flag — sampled top 48 games: only 8/48 embeddable → REJECTED as primary source
+  * CrazyGames: 401 + X-Frame-Options SAMEORIGIN → blocked; also poisons GameFlare games that source from crazygames.com/gameframe/* (render-verified dead)
+  * GameFlare: /embed/{slug}/ pages render clean playable games cross-origin (Moto X3M verified with real-Chrome UA) → PRIMARY SOURCE
+  * HeadlessChrome UA triggers Cloudflare managed challenge on kbhgames/gameflare; real-Chrome UA passes — test-env artifact only, real users unaffected (KBH/GF entries in curated 74 already worked this way)
+- New scraper scripts/fetch-gameflare-listing.mjs:
+  * discovers all 274 categories from /categories/ + most-played-games (50p) + best-games (6p)
+  * page-by-page with soft-404 repeat detection (deep most-played pages serve identical fallback content)
+  * H1→first-H2 scoping so "Popular Games"/"Best Games" cross-promo strips never pollute category tags (bug found: Monopoly had 74 categories)
+  * parses grid + list tiles: slug, title, thumb (400-300), rating, plays (2.1m→2.1M), published, tech, popover desc
+  * → data/gameflare-listing.json: 4,527 unique games, plays-ranked
+- Catalog builder rewritten (scripts/build-games-catalog.mjs):
+  * keeps the 62 hand-curated classics + 12 builtins; adds top GameFlare games by plays
+  * idempotent (gf- prefixed entries never treated as curated on rebuild)
+  * dedupe by gf slug + normalized title vs curated (Run 3 etc. preserved)
+  * category taxonomy: 3-tier CAT_MAP (franchise tier 0 → genre tier 1 → broad tier 2) mapping 274 gf-cats → 21 Memphis categories + TITLE_OVERRIDES (monopoly→card, whack your boss→casual, age of war→strategy, run 3→platformer); category rule order tuned via spot-checks (fnaf→horror beats base-defense→strategy; music→rhythm beats generic horror so Sprunki→rhythm)
+  * STRICT embed verification (after finding header-only checks insufficient):
+     - wrapper page: HTTP 200, no XFO, no CSP frame-ancestors
+     - inner game URL: embed pages use lazy pattern <iframe src="loading/" data-src="REAL"> — extract data-src; drop blocked hosts (crazygames/playhop/kogama/poki/twoplayergames — all render-verified dead or XFO/DENY); TRUSTED hosts (gameflare/gamedistribution/scratch/kdata) pass; unknown third-party hosts get their own header check
+     - no-iframe embeds = self-hosted JS games → accepted (render-verified: 8 Ball Pool, Cartoon Strike, SSF2, Mine Clone)
+  * 1,900 candidates verified in 51s, 352 dropped (18.5% dead: crazygames/kogama/playhop-sourced)
+- FINAL CATALOG: 1,574 games = 62 curated + 1,500 GameFlare (plays ≥ ~15k) + 12 builtins; 490KB; 21 categories (arcade 212, action 177, racing 140, simulation 117, shooter 115, casual 113, horror 102, io 78, sports 77, sandbox 68, rhythm 67, strategy 66, platformer 64, puzzle 62, adventure 54, card 20, fighting 14, classic 13, idle 8, two-player 6, trivia 1)
+- Notable coverage: FNAF series, Papa Louie series, Sprunki, Bloons TD 5, Angry Birds, Monopoly, 8 Ball Pool, Super Smash Flash 2, Whack Your Boss, Learn to Fly 3, Red Ball 4, Flappy Bird Online, Lego Ninjago, Nick Basketball, Governor of Poker, Dynast.io + all 62 curated classics (Krunker, Slither, Moto X3M, FNF, Cookie Clicker…)
+- Copy updated: home-view (5 spots), footer, layout.tsx meta, types.ts nav desc, api/games route comment, README (counts + data-sources section)
+- VERIFIED END-TO-END (agent-browser + VLM screenshot analysis, real-Chrome UA):
+  * /api/games: total 1574, search (freddy=8, moto=6, papa=17), category filter, A-Z sort, deep pagination (page 29), 12ms latency, gf- ids resolve for favorites/recents
+  * Play view: 48 cards page 1, all thumbnails load (data.gameflare.com CDN), infinite scroll 48→144→192, search, favorites chip (Favorites (1) with Papa's Scooperia), recents, built-in chip (12), Horror chip (102 games)
+  * Game player: Papa's Scooperia launched direct-embed, interstitial rendered (PLAY GAME + Flipline art), favorite + close buttons work
+  * 8 random games across 8 categories render (Short Life, Pixel Road Taxi, Ambulance Driver, Sprunki Phase 10, Governor of Poker, Dynast.io, Nick Basketball 2, Lego Ninjago) — 8/8 pass
+  * all views visited (Home/Play/Apps/Chat/AI/Listen/Watch/Browse): 0 page errors; only pre-existing transient epoxy reconnect noise while wisp relay restarts
+  * lint: 0 errors (38 pre-existing warnings); ts parse-check: OK
+- Proxy-mode fallback for blocked-host games (px:1) tested via Browse view: gameflare wrapper loads through scramjet but inner crazygames frame renders black → NOT shipped; direct-embed-only catalog
+
+Stage Summary:
+- Games catalog scaled 74 → 1,574 (21×), every entry build-time verified embeddable (wrapper + inner-iframe host), popularity-ranked, deduped, categorized into a 21-category taxonomy; pipeline is two re-runnable scripts (fetch-gameflare-listing → build-games-catalog) documented in README.

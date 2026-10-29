@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Memphis unBLACKed",
   description:
-    "Memphis unBLACKed — 74 popular games, 50 apps, Spotify, YouTube, unlimited GLM AI chat and a Scramjet web proxy.",
+    "Memphis unBLACKed — 1,400+ popular games, 50 apps, Spotify, YouTube, unlimited GLM AI chat and a Scramjet web proxy.",
   icons: {
     icon: "/memphis.svg",
   },

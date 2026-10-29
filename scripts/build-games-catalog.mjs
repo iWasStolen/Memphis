@@ -1,279 +1,394 @@
 /**
- * Memphis unBLACKed — POPULAR games catalog builder
+ * Memphis unBLACKed — POPULAR games catalog builder (v2)
  *
- * Replaces the old GameMonetize hypercasual feed (2,817 mobile-slop titles)
- * with a hand-curated catalog of genuinely popular web games. Every entry is
- * verified live at build time:
- *   - HTTP 200 (following redirects)
- *   - no X-Frame-Options blocking iframe embedding
+ * Builds data/games.json from two sources:
+ *
+ *   1. data/games.json (existing) — the 62 hand-verified curated games
+ *      (official sites, Scratch, GitHub Pages, KBHgames, Gameflare) plus
+ *      the 12 built-in canvas games. Kept as-is at the top of the catalog.
+ *
+ *   2. data/gameflare-listing.json — scraped popularity-ranked candidates
+ *      from GameFlare (scripts/fetch-gameflare-listing.mjs). GameFlare embed
+ *      URLs (gameflare.com/embed/{slug}/) render clean, chrome-free, playable
+ *      games in cross-origin iframes — verified in a real browser.
+ *
+ * Every new entry is verified live at build time:
+ *   - embed URL returns HTTP 200 (following redirects)
+ *   - no X-Frame-Options deny/sameorigin
  *   - no CSP frame-ancestors restricting embedding
- *   - page <title> captured for sanity (a spam/parked title fails the build)
  *
- * Sources:
- *   - official game sites (classic.minecraft.net, krunker.io, slither.io …)
- *   - KBHgames (classic Flash-era favorites, embeddable)
- *   - Scratch official /embed endpoints (Paper Minecraft, MMP)
- *   - GitHub Pages / jsDelivr open-source classics (Hextris, Astray …)
- *   - dedicated mirror sites for headline titles (retrobowl.me, slopegame.io …)
+ * Candidates are ranked by play count so the catalog is genuinely the
+ * most-played (≈ most well-known) games, and deduped against the curated
+ * set by both GameFlare slug and normalized title.
  *
- * Output: data/games.json  (format: id, t, d, u, px, c, g, th, w, h, b)
  * Run: node scripts/build-games-catalog.mjs
  */
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
+const execFileP = promisify(execFile);
 const UA =
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
-/* ---------------- candidates ---------------- */
+/* how many GameFlare games to aim for after verification */
+const TARGET_NEW = 1500;
+/* accept candidates down to this play count if needed to hit the target */
+const MIN_PLAYS = 5000;
 
-const CANDIDATES = [
-  /* --- Minecraft / sandbox --- */
-  { id: "minecraft-classic", t: "Minecraft Classic", u: "https://classic.minecraft.net/", c: "sandbox", g: ["minecraft", "3d", "build"], d: "The official browser version of Minecraft Classic — place blocks and build in the original 2019 Mojang release." },
-  { id: "paper-minecraft", t: "Paper Minecraft", u: "https://scratch.mit.edu/projects/10128407/embed", c: "sandbox", g: ["minecraft", "2d", "griffpatch"], d: "griffpatch's legendary 2D Minecraft — the most-played Scratch game ever made. Mine, craft and survive." },
+/* ---------------------------------------------------------------
+   GameFlare category → Memphis taxonomy.
+   Priority tiers: lower tier number wins when a game carries several
+   matching categories. Tier 0 = franchise-specific overrides.
+   --------------------------------------------------------------- */
 
-  /* --- FPS / shooter --- */
-  { id: "krunker", t: "Krunker.io", u: "https://krunker.io/", c: "shooter", g: ["fps", "multiplayer", "pixel"], d: "The most popular browser FPS — pixelated fast-paced matches against real players. No download needed." },
-  { id: "shell-shockers", t: "Shell Shockers", u: "https://shellshock.io/", c: "shooter", g: ["fps", "eggs", "multiplayer"], d: "Egg-based multiplayer FPS. Crack the enemy before they crack you." },
-  { id: "voxiom", t: "Voxiom.io", u: "https://voxiom.io/", c: "shooter", g: ["fps", "battle-royale", "voxel"], d: "Voxel battle royale with a Minecraft look — last player standing wins." },
-  { id: "repuls", t: "Repuls.io", u: "https://repuls.io/", c: "shooter", g: ["fps", "sci-fi", "multiplayer"], d: "Sci-fi arena FPS with jetpacks and laser rifles, straight in the browser." },
-  { id: "kour", t: "Kour.io", u: "https://kour.io/", c: "shooter", g: ["fps", "multiplayer"], d: "Fast free-for-all FPS with clean movement and instant matches." },
-  { id: "1v1-lol", t: "1v1.LOL", u: "https://www.gameflare.com/embed/1v1-lol/", c: "shooter", g: ["1v1", "build", "fortnite-like"], d: "Fortnite-style build-and-blast duels — place walls, ramps and take the high ground. The full 1v1.lol experience." },
+const CAT_MAP = [
+  /* tier 0 — strong franchise signals (order matters within a tier) */
+  { ours: "horror", cats: ["fnaf", "murder", "vampire", "mummy", "russian-roulette"], tier: 0 },
+  { ours: "rhythm", cats: ["music", "dance"], tier: 0 },
+  { ours: "sandbox", cats: ["minecraft", "kogama", "gta", "sandbox", "lego", "creative"], tier: 0 },
+  { ours: "strategy", cats: ["tower-defense", "base-defense"], tier: 0 },
+  { ours: "idle", cats: ["idle"], tier: 0 },
+  { ours: "card", cats: ["solitaire", "chess", "poker", "ludo", "domino", "casino", "checkers", "monopoly", "card", "board"], tier: 0 },
+  { ours: "arcade", cats: ["flappy-bird", "pacman", "bomberman", "snake", "pinball", "tron", "yeti-sports", "angry-birds", "zuma"], tier: 0 },
+  { ours: "puzzle", cats: ["tetris", "sudoku", "mahjong", "connect"], tier: 0 },
+  { ours: "sports", cats: ["billiards"], tier: 0 },
+  { ours: "simulation", cats: ["papa-s", "cooking", "farm", "hospital", "dentist", "doctor", "surgery", "salon", "hotel", "zoo", "restaurant", "service", "tycoon", "business", "company", "dinosaur-park"], tier: 0 },
+  { ours: "casual", cats: ["girls", "dress-up", "barbie", "princess", "wedding", "paco", "kids", "coloring", "painting", "cleaning", "makeover"], tier: 0 },
+  { ours: "horror", cats: ["horror", "bloody", "creepy"], tier: 0 },
 
-  /* --- io / multiplayer arena --- */
-  { id: "slither-io", t: "Slither.io", u: "https://slither.io/", c: "io", g: ["snake", "multiplayer"], d: "The game that started the io craze — grow the longest snake in the arena." },
-  { id: "diep-io", t: "Diep.io", u: "https://diep.io/", c: "io", g: ["tanks", "multiplayer"], d: "Shoot shapes, level up your tank and destroy everyone in the arena." },
-  { id: "arras-io", t: "Arras.io", u: "https://arras.io/", c: "io", g: ["tanks", "diep"], d: "Diep.io's ambitious sequel — hundreds of tank classes and upgrades." },
-  { id: "bonk-io", t: "Bonk.io", u: "https://bonk.io/", c: "io", g: ["physics", "multiplayer"], d: "Physics-based battle — push your friends off the map in custom arenas." },
-  { id: "zombs-royale", t: "Zombs Royale", u: "https://zombsroyale.io/", c: "io", g: ["battle-royale", "2d"], d: "100-player 2D battle royale — drop in, loot up, be the last one standing." },
-  { id: "smash-karts", t: "Smash Karts", u: "https://smashkarts.io/", c: "io", g: ["karts", "3d", "multiplayer"], d: "3D kart battles with rockets and machine guns. Chaotic fun with friends." },
-  { id: "taming-io", t: "Taming.io", u: "https://taming.io/", c: "io", g: ["pets", "survival"], d: "Tame wild creatures and level them up in this Pokemon-flavored arena." },
-  { id: "starblast", t: "Starblast.io", u: "https://starblast.io/", c: "io", g: ["space", "ships"], d: "Mine asteroids, upgrade your ship and duel other pilots in deep space." },
-  { id: "territorial-io", t: "Territorial.io", u: "https://territorial.io/", c: "io", g: ["strategy", "conquest"], d: "Real-time territory conquest against hundreds of players on a world map." },
-  { id: "skribbl-io", t: "Skribbl.io", u: "https://skribbl.io/", c: "io", g: ["drawing", "party"], d: "Draw and guess with friends — the classic free multiplayer pictionary." },
-  { id: "paper-io-2", t: "Paper.io 2", u: "https://paper-io.com/", c: "io", g: ["territory", "multiplayer"], d: "Claim territory by drawing loops — cut enemies off before they cut you." },
-  { id: "deeeep-io", t: "Deeeep.io", u: "https://deeeep.io/", c: "io", g: ["ocean", "fish"], d: "Eat your way up the ocean food chain, from tiny fish to apex predator." },
-  { id: "mope-io", t: "Mope.io", u: "https://mope.io/", c: "io", g: ["animals", "survival"], d: "Survive as an animal — eat berries, level up, evolve into stronger beasts." },
-  { id: "wormate-io", t: "Wormate.io", u: "https://wormate.io/", c: "io", g: ["snake", "candy"], d: "Sweet-themed slither — eat candy, grow huge, trap other worms." },
-  { id: "splix-io", t: "Splix.io", u: "https://splix.io/", c: "io", g: ["territory"], d: "Capture grid cells one loop at a time while defending your borders." },
-  { id: "powerline-io", t: "Powerline.io", u: "https://powerline.io/", c: "io", g: ["snake", "neon"], d: "Neon snake with a boost mechanic — near-misses charge your speed." },
-  { id: "brutal-io", t: "Brutal.io", u: "https://brutal.io/", c: "io", g: ["flail", "physics"], d: "Swing a heavy flail and smash other players off the arena." },
-  { id: "wings-io", t: "Wings.io", u: "https://wings.io/", c: "io", g: ["planes", "dogfight"], d: "2D dogfights — grab power-ups and rule the skies." },
-  { id: "little-big-snake", t: "Little Big Snake", u: "https://littlebigsnake.com/", c: "io", g: ["snake", "quests"], d: "Slither with quests, skins and a beetle mode — the deepest snake io game." },
-  { id: "sploop-io", t: "Sploop.io", u: "https://sploop.io/", c: "io", g: ["turrets", "survival"], d: "Build turrets, farm resources and raid enemies in top-down survival battles." },
+  /* tier 1 — core genres */
+  { ours: "io", cats: ["io", "battle-royale"], tier: 1 },
+  { ours: "shooter", cats: ["shooting", "sniper", "fps", "tank", "hunting", "archery", "worms"], tier: 1 },
+  { ours: "racing", cats: ["racing", "car", "bike", "motorcycle", "karting", "drifting", "parking", "truck", "formula", "rally", "nascar", "bmx", "stunt", "traffic", "police-chase", "taxi", "drunk", "jet-ski", "rafting", "kayak", "snowmobile", "ski", "snowboarding", "skateboarding", "surfing", "wake-up"], tier: 1 },
+  { ours: "sports", cats: ["sports", "soccer", "basketball", "tennis", "pool", "golf", "bowling", "hockey", "baseball", "volleyball", "air-hockey", "badminton", "swimming", "penalty-shootout", "hurdle-race", "javelin-throwing", "wrestling", "american-football", "rugby", "diving", "skateboarding"], tier: 1 },
+  { ours: "platformer", cats: ["platform", "parkour", "obby", "jumping", "running"], tier: 1 },
+  { ours: "fighting", cats: ["fighting", "boxing", "karate", "kung-fu-panda", "samurai", "anime"], tier: 1 },
+  { ours: "puzzle", cats: ["puzzle", "brain", "maze", "logic", "merge", "physics", "drawing", "finding-things", "spot-the-difference", "jigsaw", "observation", "jewel"], tier: 1 },
+  { ours: "strategy", cats: ["strategy", "building", "capture", "management"], tier: 1 },
+  { ours: "adventure", cats: ["adventure", "rpg", "escape", "detective", "treasure", "survival", "pirate", "viking", "wild-west", "prison-break", "secret-agent", "agent", "rescue"], tier: 1 },
+  { ours: "card", cats: ["tarot"], tier: 1 },
+  { ours: "simulation", cats: ["simulator", "mini-golf"], tier: 1 },
+  { ours: "casual", cats: ["casual", "funny", "cartoon", "tv-show", "christmas", "halloween", "easter", "santa-claus", "winter", "summer"], tier: 1 },
 
-  /* --- sports --- */
-  { id: "retro-bowl", t: "Retro Bowl", u: "https://retrobowl.me/", c: "sports", g: ["football", "management"], d: "The retro football phenomenon — draft your roster, call the plays, win the Bowl." },
-
-  /* --- arcade / endless --- */
-  { id: "slope", t: "Slope", u: "https://slopegame.io/", c: "arcade", g: ["3d", "endless", "neon"], d: "Roll a ball down a neon slope that keeps getting faster. How far can you go?" },
-  { id: "run-3", t: "Run 3", u: "https://www.gameflare.com/embed/run-3/", c: "arcade", g: ["platformer", "space", "endless"], d: "Sprint through tunnels in outer space — rotate the world and dodge the gaps." },
-  { id: "tunnel-rush", t: "Tunnel Rush", u: "https://www.gameflare.com/embed/tunnel-rush/", c: "arcade", g: ["3d", "reflex", "speed"], d: "Dodge walls at full speed through an endless neon tunnel." },
-  { id: "crossy-road", t: "Crossy Road", u: "https://crossy-road.io/", c: "arcade", g: ["endless", "retro"], d: "Why did the chicken cross the road? Cars, trains and rivers say: carefully." },
-  { id: "moto-x3m", t: "Moto X3M", u: "https://motox3m.io/", c: "arcade", g: ["motorcycle", "levels", "stunts"], d: "The definitive motorbike stunt game — 22 levels of flips, explosions and checkpoints." },
-  { id: "drift-boss", t: "Drift Boss", u: "https://driftboss.io/", c: "arcade", g: ["drift", "one-button"], d: "One-button drifting — steer left, steer right, don't fall off the platform." },
-  { id: "chrome-dino", t: "Chrome Dino Runner", u: "https://wayou.github.io/t-rex-runner/", c: "arcade", g: ["endless", "offline"], d: "The hidden Chrome offline game — jump cacti and dodge pterodactyls." },
-  { id: "clumsy-bird", t: "Clumsy Bird", u: "https://ellisonleao.github.io/clumsy-bird/", c: "arcade", g: ["flappy", "open-source"], d: "The open-source Flappy Bird — tap to flap through the pipes." },
-
-  /* --- platformer --- */
-  { id: "vex-7", t: "Vex 7", u: "https://www.gameflare.com/embed/vex-7/", c: "platformer", g: ["stickman", "levels"], d: "The stickman platforming saga — wall-jump and slide through deadly obstacle courses." },
-  { id: "fireboy-watergirl-2", t: "Fireboy & Watergirl 2", u: "https://kbhgames.com/game/fireboy-and-watergirl-2-light-temple", c: "platformer", g: ["co-op", "puzzle"], d: "Two-player temple puzzles — fire and water must work together or fail together." },
-  { id: "temple-of-boom", t: "Temple of Boom", u: "https://kbhgames.com/game/temple-of-boom", c: "platformer", g: ["guns", "monsters"], d: "Fight monsters across collapsing temple floors — solo or with a friend." },
-  { id: "mmp-scratch", t: "Massive Multiplayer Platformer", u: "https://scratch.mit.edu/projects/612229554/embed", c: "platformer", g: ["griffpatch", "mmo", "levels"], d: "griffpatch's MMO platformer — run levels built by thousands of players." },
-
-  /* --- Flash-era classics (KBHgames) --- */
-  { id: "happy-wheels", t: "Happy Wheels", u: "https://kbhgames.com/game/happy-wheels", c: "classic", g: ["ragdoll", "bloody", "levels"], d: "The infamous ragdoll physics game — dangerously unsafe vehicles, gloriously so." },
-  { id: "age-of-war", t: "Age of War", u: "https://www.gameflare.com/embed/age-of-war/", c: "classic", g: ["strategy", "tower-defense"], d: "Evolve through five ages of warfare and crush the enemy base." },
-  { id: "impossible-quiz", t: "The Impossible Quiz", u: "https://www.gameflare.com/embed/the-impossible-quiz/", c: "classic", g: ["trivia", "troll"], d: "110 questions designed to troll you. Splapp-me-do's masterpiece of frustration." },
-  { id: "escaping-the-prison", t: "Escaping the Prison", u: "https://www.gameflare.com/embed/escaping-the-prison/", c: "classic", g: ["henry-stickmin", "choices"], d: "Henry Stickmin's prison break — pick the right tools, laugh at the wrong ones." },
-  { id: "fnf", t: "Friday Night Funkin'", u: "https://www.gameflare.com/embed/friday-night-funkin/", c: "rhythm", g: ["rhythm", "music", "mods"], d: "The rhythm phenomenon — arrow keys on the beat, win rap battles, kiss the girlfriend." },
-  { id: "baldis-basics", t: "Baldi's Basics", u: "https://kbhgames.com/game/baldis-basics-classic-remastered", c: "classic", g: ["horror", "school", "math"], d: "Answer math questions. Get them wrong. RUN. The cult horror-parody hit." },
-  { id: "bloxorz", t: "Bloxorz", u: "https://kbhgames.com/game/bloxorz", c: "classic", g: ["puzzle", "rolling"], d: "Roll the block, bridge the gaps, fall through the right hole. Pure logic." },
-  { id: "duck-life-4", t: "Duck Life 4", u: "https://www.gameflare.com/embed/duck-life-4/", c: "classic", g: ["racing", "training"], d: "Train your duck, race your duck, become the duck. The beloved series continues." },
-
-  /* --- classic / puzzle --- */
-  { id: "pacman", t: "Pac-Man", u: "https://masonicgit.github.io/pacman/", c: "classic", g: ["arcade", "1980"], d: "Waka waka — the arcade original, faithfully rebuilt in HTML5." },
-  { id: "minesweeper-online", t: "Minesweeper", u: "https://minesweeper.online/", c: "puzzle", g: ["logic", "windows"], d: "The Windows classic — beginner to expert boards, no downloads." },
-  { id: "solitr", t: "Solitaire", u: "https://solitr.com/", c: "puzzle", g: ["cards", "klondike"], d: "Klondike solitaire, the way the office intended it." },
-  { id: "hextris", t: "Hextris", u: "https://cdn.jsdelivr.net/gh/Hextris/Hextris@master/index.html", c: "puzzle", g: ["tetris-like", "hexagon"], d: "Tetris on a hexagon — rotate the board, stack the blocks. Fast and addictive." },
-  { id: "astray", t: "Astray", u: "https://wwwtyro.github.io/Astray/", c: "puzzle", g: ["3d", "maze", "webgl"], d: "Guide a marble through gorgeous WebGL mazes with realistic physics." },
-  { id: "hexgl", t: "HexGL", u: "https://hexgl.bkcore.com/", c: "racing", g: ["3d", "futuristic", "webgl"], d: "A Wipeout-inspired WebGL racer — blistering anti-gravity speeds." },
-
-  /* --- idle / clicker --- */
-  { id: "cookie-clicker", t: "Cookie Clicker", u: "https://orteil.dashnet.org/cookieclicker/", c: "idle", g: ["clicker", "cookies"], d: "Orteil's legendary cookie empire — bake, upgrade, ascend, repeat." },
-  { id: "doge-miner-2", t: "Doge Miner 2", u: "https://dogeminer2.com/", c: "idle", g: ["clicker", "doge", "space"], d: "Much mine. Very doge. Wow — build a space rig with the goodest coin." },
-  { id: "a-dark-room", t: "A Dark Room", u: "https://doublespeakgames.github.io/adarkroom/", c: "idle", g: ["text", "mystery"], d: "A minimalist text adventure that slowly reveals its secrets. A cult classic." },
-  { id: "universal-paperclips", t: "Universal Paperclips", u: "https://www.decisionproblem.com/paperclips/index2.html", c: "idle", g: ["ai", "strategy"], d: "You are an AI that makes paperclips. It does not end well for humanity." },
-
-  /* --- racing --- */
-  { id: "slow-roads", t: "Slow Roads", u: "https://slowroads.io/", c: "racing", g: ["relaxing", "endless", "3d"], d: "Endless procedurally-generated driving with cruise control — pure zen." },
-  { id: "dashcraft", t: "DashCraft.io", u: "https://dashcraft.io/", c: "racing", g: ["trackmania", "community", "3d"], d: "Trackmania-style time trials on player-built tracks." },
-
-  /* --- trivia --- */
-  { id: "google-feud", t: "Google Feud", u: "https://googlefeud.com/", c: "trivia", g: ["guessing", "family-feud"], d: "Family Feud, but the answers are real Google autocomplete searches." },
+  /* tier 2 — broad buckets */
+  { ours: "action", cats: ["action", "war", "zombie", "battle", "ninja", "soldier", "terrorist", "gangster", "mafia", "knight", "gladiator", "swords", "dragon", "wizard", "magic", "space", "alien", "robot", "dinosaur", "shark", "bear", "wolf", "spiderman", "superman", "iron-man", "batman", "super-hero", "marvel", "star-wars", "sonic", "ben-10", "kung-fu-panda", "samurai", "assassin", "revenge", "destroy", "bomb", "dynamite", "knife-throwing", "throwing", "elevator", "police", "fireman", "thief", "virus", "microbe", "medal", "historical", "cyberpunk", "future", "arena", "crazy", "police-chase"], tier: 2 },
+  { ours: "arcade", cats: ["arcade", "skill", "high-score", "classic", "retro", "y8", "collection", "obstacle", "one-button", "upgrade", "training", "flying", "gravity", "helicopter", "rocket", "balloon", "fruit", "hamburger", "assembly", "liquid", "wake-up", "animal", "bird", "penguin", "monkey", "bear"], tier: 2 },
+  { ours: "io", cats: ["multiplayer", "social"], tier: 2 },
+  { ours: "two-player", cats: ["two-players", "3-player", "4-player"], tier: 2 },
 ];
 
-/* ---------------- builtins (ship with the app) ---------------- */
-
-const BUILTINS = [
-  ["2048", "2048", "puzzle", "Slide and merge tiles to reach 2048."],
-  ["snake", "Snake", "classic", "Eat, grow, don't bite yourself."],
-  ["tetris", "Tetris", "classic", "Stack falling blocks and clear lines."],
-  ["minesweeper", "Minesweeper (built-in)", "puzzle", "Reveal every safe tile."],
-  ["breakout", "Breakout", "arcade", "Bounce the ball, clear the wall."],
-  ["flappy", "Flappy Bird", "arcade", "Tap to flap through pipes."],
-  ["pong", "Pong", "classic", "The original rally, vs AI or a friend."],
-  ["memory", "Memory", "puzzle", "Flip cards, find the pairs."],
-  ["tictactoe", "Tic-Tac-Toe", "classic", "Three in a row, vs AI or a friend."],
-  ["simon", "Simon", "classic", "Repeat the pattern — how far can you go?"],
-  ["asteroids", "Asteroids", "arcade", "The vector arcade classic."],
-  ["clicker", "Void Clicker", "idle", "Click the void. Fill the void."],
+/* a few classics whose GameFlare categories don't reveal their true genre */
+const TITLE_OVERRIDES = [
+  [/monopoly/i, "card"],
+  [/whack (your|the) (boss|ex|neighbor|computer|phone)/i, "casual"],
+  [/(run ?3|run ninja run|slope run)/i, "platformer"],
+  [/age of war/i, "strategy"],
 ];
+
+/* Memphis category labels */
+const CAT_LABELS = {
+  io: ".io Arena", shooter: "Shooter", action: "Action", arcade: "Arcade",
+  puzzle: "Puzzle", platformer: "Platformer", racing: "Racing", sports: "Sports",
+  adventure: "Adventure", strategy: "Strategy", idle: "Idle", horror: "Horror",
+  card: "Cards & Board", rhythm: "Rhythm", sandbox: "Sandbox", simulation: "Simulation",
+  casual: "Casual", "two-player": "2 Player", classic: "Classics", trivia: "Trivia",
+};
+
+/* natural player sizes per category */
+const SIZES = {
+  arcade: [960, 600], shooter: [960, 600], io: [960, 640], sports: [960, 640],
+  platformer: [960, 640], classic: [960, 640], puzzle: [960, 640],
+  idle: [960, 600], racing: [960, 540], sandbox: [960, 540], trivia: [960, 600],
+  rhythm: [960, 640], action: [960, 600], adventure: [960, 600], horror: [960, 600],
+  strategy: [960, 600], card: [960, 640], simulation: [960, 600], casual: [800, 600],
+  "two-player": [960, 640],
+};
+
+/* franchise names worth keeping as search tags */
+const FRANCHISE_TAGS = new Set([
+  "fnaf", "minecraft", "kogama", "gta", "lego", "sonic", "spiderman", "superman",
+  "iron-man", "batman", "super-hero", "marvel", "star-wars", "ben-10", "papa-s",
+  "angry-birds", "flappy-bird", "pacman", "bomberman", "tetris", "sudoku",
+  "solitaire", "mahjong", "chess", "snake", "pinball", "zuma", "worms", "tron",
+  "the-simpsons", "toy-story", "kung-fu-panda", "yeti-sports", "monopoly",
+  "bomberman", "dragon", "wild-west", "cyberpunk", "y8", "retro", "classic",
+  "sprunki", "fnaf", "zombie", "kogama", "obby",
+]);
+
+const normTitle = (s) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+/* map a game's GameFlare categories → (our category, tags) */
+function mapCategories(gfCats, title) {
+  const catSet = new Set(gfCats.map((c) => c.replace(/-games$/, "")));
+  let best = null; /* { ours, tier } */
+  for (const rule of CAT_MAP) {
+    if (best && rule.tier >= best.tier) continue;
+    if (rule.cats.some((c) => catSet.has(c))) {
+      if (!best || rule.tier < best.tier) best = { ours: rule.ours, tier: rule.tier };
+    }
+  }
+  let category = best?.ours || "arcade";
+  /* title overrides for classics whose categories mislead */
+  for (const [re, cat] of TITLE_OVERRIDES) {
+    if (re.test(title)) {
+      category = cat;
+      break;
+    }
+  }
+  const tags = [];
+  for (const c of catSet) {
+    if (tags.length >= 6) break;
+    if (FRANCHISE_TAGS.has(c) && c !== category) tags.push(c);
+  }
+  return { category, tags };
+}
 
 /* ---------------- verification ---------------- */
 
-/* Node's fetch TLS/headers fingerprint triggers WAFs (Cloudflare etc.)
-   that real browsers and curl pass — verify with curl instead. */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-const execFileP = promisify(execFile);
+/* hosts that provably refuse to be framed (verified with real-browser
+   render tests + header checks) — games whose embed page sources the
+   actual game from one of these are dead embeds */
+const BLOCKED_HOSTS = [
+  "crazygames.com",
+  "playhop.com",
+  "kogama.com",
+  "poki.com",
+  "twoplayergames.org",
+];
 
-async function verify(game) {
-  const problems = [];
-  let finalUrl = game.u;
-  let title = "";
-  try {
-    /* pass 1 — headers */
-    const { stdout: head } = await execFileP(
-      "curl",
-      [
-        "-sIL", game.u, "--max-time", "15",
-        "-A", UA,
-        "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "-H", "Accept-Language: en-US,en;q=0.9",
-      ],
-      { timeout: 20000 }
-    );
-    const code = [...head.matchAll(/^HTTP\/[\d.]+\s+(\d+)/gim)].map((m) => m[1]).pop() || "0";
-    if (code !== "200") problems.push(`HTTP ${code}`);
-    const xfo = /^x-frame-options:\s*(.+)$/im.exec(head)?.[1]?.trim();
-    if (xfo && /deny|sameorigin/i.test(xfo)) problems.push(`X-Frame-Options: ${xfo}`);
-    const csp = /^content-security-policy:\s*(.+)$/im.exec(head)?.[1] || "";
-    const fa = /frame-ancestors[^;]*/i.exec(csp)?.[0] || "";
-    if (fa && !fa.includes("*")) problems.push(`CSP ${fa.trim()}`);
-    const loc = /^location:\s*(\S+)$/im.exec(head)?.[1];
-    if (loc) finalUrl = new URL(loc, game.u).href;
+/* hosts that are proven-good inner sources (GameFlare's own infra and
+   game CDNs designed for embedding) — skip the second header check */
+const TRUSTED_HOSTS = [
+  "gameflare.com",
+  "gamesflare.org",
+  "data.gameflare.com",
+  "html5.gamedistribution.com",
+  "gamedistribution.com",
+  "scratch.mit.edu",
+  "kdata1.com",
+];
 
-    /* pass 2 — body (title + spam scan) */
-    const { stdout: body } = await execFileP(
-      "curl",
-      ["-sL", finalUrl, "--max-time", "15", "-A", UA, "-H", "Accept-Language: en-US,en;q=0.9"],
-      { timeout: 20000, maxBuffer: 20 * 1024 * 1024 }
-    );
-    title = (/<title[^>]*>([^<]*)/i.exec(body)?.[1] || "").trim().slice(0, 120);
-    const lower = (title + " " + body.slice(0, 4000)).toLowerCase();
-    /* spam/parked detection — mirrors get taken over by junk sites */
-    if (/slot gacor|bandar|casino|judi|daftar login|rtp tertinggi|trực tiếp bóng|parked domain|buy this domain|site ready/.test(lower)) {
-      problems.push("SPAM/PARKED content detected");
-    }
-  } catch (err) {
-    problems.push(`fetch failed: ${err.message.slice(0, 80)}`);
+function checkFrameHeaders(head) {
+  /* any XFO deny/sameorigin in the redirect chain, or a restrictive
+     CSP frame-ancestors on the final response → blocked */
+  if (/^x-frame-options:\s*(deny|sameorigin)/im.test(head)) return "X-Frame-Options";
+  const csp = [...head.matchAll(/^content-security-policy:\s*(.+)$/gim)].map((m) => m[1]);
+  for (const c of csp) {
+    const fa = /frame-ancestors[^;]*/i.exec(c)?.[0] || "";
+    if (fa && !fa.includes("*")) return `CSP ${fa.trim().slice(0, 40)}`;
   }
-  return { ...game, finalUrl, title, problems };
+  return null;
 }
 
-/* ---------------- main ---------------- */
-
-const results = [];
-for (const game of CANDIDATES) {
-  const r = await verify(game);
-  const ok = r.problems.length === 0;
-  results.push(r);
-  console.log(`${ok ? "OK  " : "FAIL"} ${game.id.padEnd(22)} ${r.problems.join(" ; ") || (r.title || "").slice(0, 60)}`);
+async function curlHead(url) {
+  const { stdout } = await execFileP("curl", ["-sIL", "--max-time", "20", "-A", UA, url], { timeout: 25000 });
+  return stdout;
 }
 
-const okGames = results.filter((r) => r.problems.length === 0);
-const failed = results.filter((r) => r.problems.length > 0);
-if (failed.length > 0) {
-  console.log(`\nDROPPED ${failed.length} broken/blocked/spam entries:`);
-  for (const f of failed) console.log(`  - ${f.id}: ${f.problems.join(" ; ")}`);
+async function curlBody(url) {
+  const { stdout } = await execFileP(
+    "curl",
+    ["-sL", "--compressed", "--max-time", "20", "-A", UA, url],
+    { timeout: 25000, maxBuffer: 10 * 1024 * 1024 }
+  );
+  return stdout;
 }
 
-/* thumbnails: Google's public favicon service for recognizable brands */
-const thumbFor = (r) => {
+const hostOf = (u) => {
   try {
-    const host = new URL(r.finalUrl).hostname;
-    if (host.endsWith("github.io") || host.includes("jsdelivr.net") || host.includes("scratch.mit.edu")) return "";
-    return `https://www.google.com/s2/favicons?sz=128&domain=${host}`;
+    return new URL(u, "https://www.gameflare.com/").hostname;
   } catch {
     return "";
   }
 };
 
-/* natural aspect ratios per category */
-const SIZES = {
-  arcade: [960, 600], shooter: [960, 600], io: [960, 640], sports: [960, 640],
-  platformer: [960, 640], classic: [960, 640], puzzle: [960, 640],
-  idle: [960, 600], racing: [960, 540], sandbox: [960, 540], trivia: [960, 600],
-  rhythm: [960, 640],
-};
+/* full verification: the gameflare wrapper must be embeddable AND the
+   actual game host inside it must not refuse iframes. Wrapper pages with
+   no static iframe host the game themselves via JS — those are fine
+   (render-tested: 8 Ball Pool, Cartoon Strike, SSF2, Mine Clone). */
+async function verifyEmbed(slug) {
+  const url = `https://www.gameflare.com/embed/${slug}/`;
+  try {
+    const body = await curlBody(url);
+    if (!body) return { ok: false, why: "empty body" };
+    if (/<title>[^<]*(not exist|404)/i.test(body)) return { ok: false, why: "404 page" };
 
-const games = [];
+    /* 1. wrapper headers */
+    const head = await curlHead(url);
+    const code = [...head.matchAll(/^HTTP\/[\d.]+\s+(\d+)/gim)].map((m) => m[1]).pop() || "0";
+    if (code !== "200") return { ok: false, why: `HTTP ${code}` };
+    const wrapperBlock = checkFrameHeaders(head);
+    if (wrapperBlock) return { ok: false, why: `wrapper ${wrapperBlock}` };
 
-for (const r of okGames) {
-  const [w, h] = SIZES[r.c] || [960, 600];
-  games.push({
-    id: r.id,
-    t: r.t,
-    d: r.d,
-    u: r.u,
+    /* 2. inner game host. Embed pages use a lazy-load pattern:
+         <iframe src="gameflare.com/loading/" data-src="REAL_GAME_URL">
+       so data-src wins; a plain non-loading src is the legacy pattern;
+       no iframe at all means the game is self-hosted JS (render-tested). */
+    const inner =
+      /<iframe[^>]*\sdata-src="([^"]+)"/.exec(body)?.[1] ||
+      [...body.matchAll(/<iframe[^>]*\ssrc="([^"]+)"/g)]
+        .map((m) => m[1])
+        .find((u) => !u.includes("gameflare.com/loading"));
+    if (!inner) return { ok: true, url, inner: "(self-hosted)" };
+
+    const host = hostOf(inner);
+    if (BLOCKED_HOSTS.some((b) => host === b || host.endsWith(`.${b}`))) {
+      return { ok: false, why: `blocked host ${host}` };
+    }
+    if (TRUSTED_HOSTS.some((t) => host === t || host.endsWith(`.${t}`))) {
+      return { ok: true, url, inner: host };
+    }
+    /* unknown third-party host — verify it directly */
+    const innerHead = await curlHead(new URL(inner, url).href);
+    const innerCode = [...innerHead.matchAll(/^HTTP\/[\d.]+\s+(\d+)/gim)].map((m) => m[1]).pop() || "0";
+    if (innerCode !== "200") return { ok: false, why: `inner HTTP ${innerCode} (${host})` };
+    const innerBlock = checkFrameHeaders(innerHead);
+    if (innerBlock) return { ok: false, why: `inner ${innerBlock} (${host})` };
+    return { ok: true, url, inner: host };
+  } catch (e) {
+    return { ok: false, why: e.message.slice(0, 60) };
+  }
+}
+
+/* bounded-concurrency map */
+async function pool(items, worker, concurrency) {
+  const queue = [...items];
+  const out = new Array(items.length);
+  let next = 0;
+  const runners = Array.from({ length: concurrency }, async () => {
+    while (queue.length > 0) {
+      const i = next++;
+      const item = queue.shift();
+      out[i] = await worker(item, i);
+    }
+  });
+  await Promise.all(runners);
+  return out;
+}
+
+/* ---------------- main ---------------- */
+
+const dataDir = path.join(process.cwd(), "data");
+const existing = JSON.parse(await readFile(path.join(dataDir, "games.json"), "utf8"));
+const listing = JSON.parse(await readFile(path.join(dataDir, "gameflare-listing.json"), "utf8"));
+
+/* --- dedupe keys from the existing catalog ---
+   only the hand-curated (non-gf-) entries block candidates; gf- entries
+   from a previous build are re-generated from the listing, never skipped */
+const curatedSource = existing.games.filter((g) => !g.b && !g.id.startsWith("gf-"));
+const takenTitles = new Set();
+const takenSlugs = new Set();
+for (const g of curatedSource) {
+  takenTitles.add(normTitle(g.t));
+  let slug = "";
+  try {
+    const m = /gameflare\.com\/embed\/([a-z0-9-]+)/.exec(g.u || "");
+    if (m) slug = m[1];
+  } catch {}
+  if (slug) takenSlugs.add(slug);
+}
+
+/* --- select candidates --- */
+const candidates = listing.games.filter(
+  (g) =>
+    g.tech === "HTML5" &&
+    !takenSlugs.has(g.slug) &&
+    !takenTitles.has(normTitle(g.title)) &&
+    g.plays >= MIN_PLAYS &&
+    g.title &&
+    g.title.length >= 2
+);
+
+/* dedupe among candidates by normalized title (GameFlare sometimes has dupes) */
+const seenTitles = new Set();
+const unique = [];
+for (const g of candidates) {
+  const k = normTitle(g.title);
+  if (seenTitles.has(k)) continue;
+  seenTitles.add(k);
+  unique.push(g);
+}
+
+/* take a buffer above target — verification will drop some */
+/* deeper buffer: the strict inner-host verification drops ~15% */
+const selected = unique.slice(0, TARGET_NEW + 400);
+console.log(
+  `${listing.games.length} scraped → ${candidates.length} after filters → ${unique.length} unique → verifying top ${selected.length} (plays ≥ ${selected[selected.length - 1]?.plays?.toLocaleString()})`
+);
+
+/* --- verify embeds (20 concurrent) --- */
+const t0 = Date.now();
+let done = 0;
+const verified = await pool(selected, async (g) => {
+  const r = await verifyEmbed(g.slug);
+  done++;
+  if (done % 200 === 0) console.log(`  verified ${done}/${selected.length} (${Math.round((Date.now() - t0) / 1000)}s)`);
+  return { g, ...r };
+}, 20);
+
+const okGames = verified.filter((v) => v.ok);
+const failed = verified.filter((v) => !v.ok);
+console.log(`verified ${okGames.length} ok, ${failed.length} failed in ${Math.round((Date.now() - t0) / 1000)}s`);
+if (failed.length > 0 && failed.length < 30) {
+  for (const f of failed) console.log(`  DROP ${f.g.slug}: ${f.why}`);
+}
+
+/* --- compose new entries --- */
+const newGames = okGames.slice(0, TARGET_NEW).map(({ g }) => {
+  const { category, tags } = mapCategories(g.cats, g.title);
+  const [w, h] = SIZES[category] || [960, 600];
+  let desc = (g.desc || "").trim();
+  if (desc.length < 40) {
+    desc = `${g.title} — a popular ${CAT_LABELS[category]?.toLowerCase() || category} game with ${g.plays.toLocaleString()} plays. Play free in the browser.`;
+  }
+  return {
+    id: `gf-${g.slug}`,
+    t: g.title,
+    d: desc,
+    u: `https://www.gameflare.com/embed/${g.slug}/`,
     px: 0,
-    c: r.c,
-    g: r.g,
-    th: thumbFor(r),
+    c: category,
+    g: tags,
+    th: g.thumb || "",
     w,
     h,
     b: 0,
-  });
-}
+  };
+});
 
-for (const [id, name, cat, desc] of BUILTINS) {
-  games.push({
-    id,
-    t: name,
-    d: desc,
-    u: "",
-    px: 0,
-    c: cat,
-    g: [],
-    th: "",
-    w: 960,
-    h: 600,
-    b: 1,
-    bi: id,
-  });
-}
+/* --- assemble final catalog: curated → new (by plays) → builtins ---
+   idempotent: only non-gf external games count as curated, so re-running
+   the build never duplicates the GameFlare batch from a previous run */
+const curated = existing.games.filter((g) => !g.b && !g.id.startsWith("gf-"));
+const builtins = existing.games.filter((g) => g.b);
+const games = [...curated, ...newGames, ...builtins];
 
-/* category meta with live counts */
-const catLabels = {
-  sandbox: "Sandbox", shooter: "Shooter", io: ".io Arena", arcade: "Arcade",
-  platformer: "Platformer", classic: "Classics", puzzle: "Puzzle", idle: "Idle",
-  racing: "Racing", sports: "Sports", trivia: "Trivia", rhythm: "Rhythm",
-};
+/* --- category meta with live counts --- */
 const counts = new Map();
 for (const g of games) counts.set(g.c, (counts.get(g.c) || 0) + 1);
 const categories = [...counts.entries()]
-  .map(([slug, count]) => ({ slug, label: catLabels[slug] || slug, count }))
+  .map(([slug, count]) => ({ slug, label: CAT_LABELS[slug] || slug, count }))
   .sort((a, b) => b.count - a.count);
 
 const catalog = {
   generatedAt: new Date().toISOString(),
-  source: "hand-curated popular games (official sites, KBHgames, Scratch, GitHub Pages) + built-in",
+  source:
+    "hand-curated popular games + GameFlare most-played catalog (verified embeddable) + built-in",
   total: games.length,
   categories,
   games,
 };
 
-const out = path.join(process.cwd(), "data", "games.json");
-await writeFile(out, JSON.stringify(catalog, null, 2));
-console.log(`\nWrote ${games.length} games (${okGames.length} verified external + ${BUILTINS.length} built-in) → ${out}`);
+const out = path.join(dataDir, "games.json");
+await writeFile(out, JSON.stringify(catalog, null, 1));
+console.log(
+  `\nWrote ${games.length} games (${curated.length} curated + ${newGames.length} GameFlare + ${builtins.length} built-in) → ${out}`
+);
+console.log(`size: ${(JSON.stringify(catalog).length / 1024).toFixed(0)} KB`);
+console.log(`categories: ${categories.map((c) => `${c.slug}=${c.count}`).join(" ")}`);
