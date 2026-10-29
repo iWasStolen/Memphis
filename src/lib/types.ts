@@ -177,6 +177,8 @@ export interface GameDef {
   desc: string;
   /** embed url for external games, empty for builtins */
   url?: string;
+  /** legacy alias for {@link GameDef.url} (src/lib/games.ts) */
+  embedUrl?: string;
   /** true when the source site refuses iframes — start proxied */
   proxy?: boolean;
   category: string;
@@ -233,4 +235,45 @@ export interface ChatUserSummary {
   status: string;
   role: string;
   online?: boolean;
+}
+
+/* ---------------- Music ---------------- */
+
+/** A generative radio station rendered live by the Web Audio engine. */
+export interface TrackDef {
+  id: string;
+  title: string;
+  artist: string;
+  genre: string;
+  bpm: number;
+  /** duration hint in seconds */
+  dur: number;
+  /** PRNG seed — same seed always renders the same track */
+  seed: number;
+  style:
+    | "lofi"
+    | "chiptune"
+    | "ambient"
+    | "synthwave"
+    | "house"
+    | "jazz"
+    | "trap"
+    | "rock";
+}
+
+/* ---------------- Watch ---------------- */
+
+/** A streamable movie/anime entry from the Internet Archive catalog. */
+export interface WatchItemDef {
+  id: string;
+  title: string;
+  year?: string;
+  /** one-line "creator · year · runtime" summary */
+  meta: string;
+  desc: string;
+  kind: "movie" | "anime";
+  source: string;
+  sourceUrl: string;
+  duration?: string;
+  rating?: string;
 }

@@ -166,3 +166,26 @@ model ChatSettings {
   registrations   Boolean @default(true)
   soundboard      Boolean @default(true)
 }
+
+model WatchItem {
+  id          String @id @default(cuid())
+  kind        String // movie | anime
+  itemKey     String
+  views       Int    @default(0)
+  ratingSum   Int    @default(0)
+  ratingCount Int    @default(0)
+
+  @@unique([kind, itemKey])
+  @@index([itemKey])
+}
+
+model WatchComment {
+  id        String   @id @default(cuid())
+  itemKey   String
+  userId    String?
+  author    String   @default("guest")
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([itemKey, createdAt])
+}

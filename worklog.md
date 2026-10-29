@@ -229,3 +229,12 @@ Work Log:
 
 Stage Summary:
 - Games catalog scaled 74 → 1,574 (21×), every entry build-time verified embeddable (wrapper + inner-iframe host), popularity-ranked, deduped, categorized into a 21-category taxonomy; pipeline is two re-runnable scripts (fetch-gameflare-listing → build-games-catalog) documented in README.
+
+## Deploy-fix session (2026-10-29)
+
+- Publish/deploy failed: production `next build` runs full TypeScript checking (dev server does not), which exposed 3 classes of errors that had slipped through:
+  1. **Missing Prisma models** — src/app/api/watch/{view,comments}/route.ts call `db.watchItem` / `db.watchComment`, but prisma/schema.prisma had no such models → added `WatchItem` (kind+itemKey unique, views/ratingSum/ratingCount) and `WatchComment` (itemKey, userId?, author, content) + indexes; `prisma db push` applied, client regenerated.
+  2. **Strict-null error** — components/apps/draw.tsx `clear()` used `canvas.width` after non-null-asserted getContext → proper null guards.
+  3. **Missing type exports** — lib/music-engine.ts imports `TrackDef`, lib/watch.ts imports `WatchItemDef` from lib/types (neither existed); lib/games.ts (dead code, superseded by games-builtin.ts + data/games.json) used `embedUrl` not on `GameDef` → added `TrackDef` (8-style union) + `WatchItemDef` to types.ts, `embedUrl?` legacy alias on GameDef.
+- Verified: `tsc --noEmit` clean, `next build` fully passes (14 API routes), dev server restarted with new client, all 3 watch endpoints live-tested (list comments / view+rate / post comment) then test rows cleaned from DB; / and /api/games (1,574 games) healthy.
+- Lesson: run `npx next build` (not just dev) before publishing — dev's Turbopack lazy type-checking hides schema/type drift.
