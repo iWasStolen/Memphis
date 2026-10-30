@@ -123,6 +123,13 @@ export default function BrowseView() {
     setHistory(lsGet(HISTORY_KEY, []));
   }, []);
 
+  /* keep the address bar in sync with the active tab — after navigation,
+     back/forward and tab switches it shows the current URL instead of a
+     stale placeholder */
+  useEffect(() => {
+    setAddr(active?.url ?? "");
+  }, [activeId, active?.url]);
+
   /* compute the scramjet-encoded src whenever the active tab url changes */
   useEffect(() => {
     let cancelled = false;
@@ -495,17 +502,21 @@ export default function BrowseView() {
       {/* viewport */}
       <div ref={viewportRef} className="flex-1 min-h-0 relative bg-black">
         {active && frameSrc ? (
+          /* absolute inset-0 — percentage heights (h-full) do not resolve
+             through the app's flex chain when an ancestor's height is
+             content-driven; anchoring to the (already relative) viewport
+             box always fills it */
           <iframe
             key={active.id + active.jar}
             src={frameSrc}
-            className="w-full h-full border-0 bg-black"
+            className="absolute inset-0 w-full h-full border-0 bg-black"
             title={active.title}
             onLoad={() => setLoading(false)}
             allow="autoplay; fullscreen; clipboard-write; encrypted-media; gamepad; xr-spatial-tracking"
           />
         ) : active?.url ? (
           /* booting the engine or proxy error */
-          <div className="h-full flex flex-col items-center justify-center gap-4 text-center px-6">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-center px-6">
             {proxyState === "error" ? (
               <>
                 <ShieldAlert className="size-10 text-white" />
@@ -595,7 +606,7 @@ export default function BrowseView() {
           </div>
         ) : (
           /* new tab page */
-          <div className="h-full overflow-y-auto">
+          <div className="absolute inset-0 overflow-y-auto">
             <div className="max-w-2xl mx-auto px-4 py-12 sm:py-16">
               <div className="text-center mb-8">
                 <div className="inline-flex items-center gap-2 text-white text-lg font-semibold">

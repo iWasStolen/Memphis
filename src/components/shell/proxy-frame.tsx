@@ -101,10 +101,13 @@ export function ProxyFrame({
       {/* viewport */}
       <div className="flex-1 min-h-0 relative">
         {src ? (
+          /* absolute inset-0 — h-full alone does not resolve through the
+             app's flex chain (indefinite ancestor heights); anchoring to
+             the relative viewport box always fills it */
           <iframe
             key={src + reloadKey}
             src={src}
-            className="w-full h-full border-0 bg-black"
+            className="absolute inset-0 w-full h-full border-0 bg-black"
             title={title}
             allow={allow}
           />

@@ -405,3 +405,24 @@ Stage Summary:
 
 Stage Summary:
 - Appearance settings now genuinely restyle the app: Graphite visibly lifts every surface and the Ash/Silver/Bone accents tint every highlight, instantly and persistently — implemented as a single cascade-layer theme engine in globals.css that re-points the codebase's literal Tailwind palette at theme variables, with defaults pixel-identical to before.
+
+## Browse: fixed the squeezed proxy frame (2026-10-30, latest)
+
+- User report: "fix the frame in the Browse section" + screenshot — Netflix loaded through the proxy but squeezed into the top sliver of the viewport, bottom ~70% empty black, outer window scrollbar.
+- REPRODUCED & DIAGNOSED (:81, agent-browser): the Browse iframe computed 150px (the iframe default replaced size) inside a 306px viewport box. Step-by-step isolation:
+  * `.h-full { height:100% }` exists in the compiled CSS and works in a plain fixed-height parent (probe: 100px host → 100px).
+  * `height:100%` on the iframe fails even as an INLINE style → not a specificity/cascade issue; percentage resolution itself fails.
+  * An absolutely-positioned probe resolves correctly at every ancestor level (577/433/433/306) → the boxes have used heights, just not DEFINITE heights for in-flow percentage children.
+  * Setting a definite height on the app shell root instantly healed the iframe (150 → 306.375px), resetting it broke it again → root cause proven.
+  * ROOT CAUSE: the shell root used `min-h-screen` (min-height) instead of a definite height. Chrome treats the whole flex chain (root → main → view root → viewport box) as indefinite for percentage resolution, so every in-flow `h-full` deep in the tree collapsed (iframes → 150px default). Same latent bug in ProxyFrame (Watch/Movy + Listen/Spotify) — both showed 150px iframes as well. The game player was unaffected (`fixed inset-0` root = definite).
+- FIX (three layers, defense in depth):
+  1. app-shell.tsx: shell root `min-h-screen` → `h-dvh overflow-hidden` (definite height, no window scrollbar), `main` gains `overflow-y-auto` so tall views (Home/Play/Apps) scroll internally with the footer pinned — verified Home scrolls inside main while document height stays exactly 100dvh.
+  2. browse-view.tsx: iframe re-anchored `absolute inset-0 w-full h-full` (its viewport box was already `relative`) so it fills the box regardless of ancestor definiteness; the engine-error/boot panel and new-tab page got the same `absolute inset-0` treatment (new-tab keeps `overflow-y-auto`).
+  3. proxy-frame.tsx (Listen + Watch): iframe re-anchored `absolute inset-0` the same way.
+- SECONDARY BUG FIXED — address bar never synced: `navigate()` never set `addr` (only goHome/addTab cleared it), so after any navigation the bar showed its placeholder — exactly what the screenshot showed (DuckDuckGo placeholder while netflix.com was loaded). Added a sync effect on `[activeId, active?.url]`; verified navigate → "https://netflix.com", Back → "https://wikipedia.org", Forward → "https://example.com".
+- VERIFIED (:81): Browse iframe 306.375px = viewport height (Netflix fills toolbar→status bar, PIL row-sampling + vision both confirm no black gap, no window scrollbar); Watch (Movy) and Listen (Spotify) iframes fillParent:true; Home scrolls inside main; footer pinned & visible; header sticky; all views render (Play grid 70 buttons); Settings modal opens and fits the viewport; zero console/page errors.
+- JSX gotcha caught pre-runtime: raw `/* */` comments are illegal between JSX attributes — moved them above the elements.
+- tsc clean, eslint 0 errors (39 pre-existing warnings), next build passes (19 routes).
+
+Stage Summary:
+- The Browse frame (and the same latent squeeze in Watch + Listen) is fixed at the root: definite app height + absolutely-anchored frames mean proxied sites now fill the whole viewport, and the address bar tracks navigation, back/forward and tab switches.

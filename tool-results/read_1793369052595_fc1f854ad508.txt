@@ -1,0 +1,682 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useRef, useState } from "react";
+     4→import { useUI, useSettings, lsGet, lsSet } from "@/lib/store";
+     5→import { proxiedHref, resetProxy } from "@/lib/scramjet";
+     6→import { proxyDiagnostics, swUnavailableGuidance, type SwGuidance } from "@/lib/proxy-guidance";
+     7→import { SEARCH_ENGINES } from "@/lib/types";
+     8→import { Button } from "@/components/ui/button";
+     9→import {
+    10→  ArrowLeft,
+    11→  ArrowRight,
+    12→  RotateCw,
+    13→  Home,
+    14→  Plus,
+    15→  X,
+    16→  ExternalLink,
+    17→  Maximize2,
+    18→  Minimize,
+    19→  Globe,
+    20→  History as HistoryIcon,
+    21→  Search,
+    22→  ShieldCheck,
+    23→  ShieldAlert,
+    24→  Clock,
+    25→  Loader2,
+    26→  Copy,
+    27→  Check,
+    28→  Lock,
+    29→} from "lucide-react";
+    30→
+    31→interface Tab {
+    32→  id: string;
+    33→  url: string | null; // raw target url, null = new tab page
+    34→  title: string;
+    35→  stack: string[];
+    36→  idx: number;
+    37→  jar: string; // bump to force iframe reload
+    38→}
+    39→
+    40→const HISTORY_KEY = "memphis-browse-history";
+    41→const QUICK_LINKS = [
+    42→  { name: "Google", url: "https://www.google.com", hint: "search" },
+    43→  { name: "YouTube", url: "https://www.youtube.com", hint: "video" },
+    44→  { name: "Reddit", url: "https://www.reddit.com", hint: "communities" },
+    45→  { name: "Wikipedia", url: "https://en.wikipedia.org", hint: "encyclopedia" },
+    46→  { name: "Spotify", url: "https://open.spotify.com", hint: "music" },
+    47→  { name: "Twitch", url: "https://www.twitch.tv", hint: "live streams" },
+    48→  { name: "Hacker News", url: "https://news.ycombinator.com", hint: "tech news" },
+    49→  { name: "Internet Archive", url: "https://archive.org", hint: "public library" },
+    50→  { name: "example.com", url: "https://example.com", hint: "test page" },
+    51→];
+    52→
+    53→/* crypto.randomUUID is a secure-context-only API — on insecure origins
+    54→   (where the proxy guidance screen must still render) it is undefined,
+    55→   so fall back to a random id. Same shape, no security relevance:
+    56→   these ids only key React lists and force iframe reloads. */
+    57→function uid(): string {
+    58→  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+    59→  return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    60→}
+    61→
+    62→function newTab(): Tab {
+    63→  return {
+    64→    id: uid(),
+    65→    url: null,
+    66→    title: "New tab",
+    67→    stack: [],
+    68→    idx: -1,
+    69→    jar: uid(),
+    70→  };
+    71→}
+    72→
+    73→export default function BrowseView() {
+    74→  const { settings } = useSettings();
+    75→  const { proxyTarget, clearProxyTarget, proxyState, proxyError, proxyStage, proxyDiag, retryProxy } = useUI();
+    76→  const [tabs, setTabs] = useState<Tab[]>([newTab()]);
+    77→  const [activeId, setActiveId] = useState<string>("");
+    78→  const [addr, setAddr] = useState("");
+    79→  const [loading, setLoading] = useState(false);
+    80→  const [fullscreen, setFullscreen] = useState(false);
+    81→  const [showHistory, setShowHistory] = useState(false);
+    82→  const [history, setHistory] = useState<{ url: string; title: string; at: number }[]>([]);
+    83→  const [linkCopied, setLinkCopied] = useState(false);
+    84→  const [showUrlFallback, setShowUrlFallback] = useState(false);
+    85→  const inputRef = useRef<HTMLInputElement>(null);
+    86→  const viewportRef = useRef<HTMLDivElement>(null);
+    87→  const loadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    88→
+    89→  const active = tabs.find((t) => t.id === activeId) ?? tabs[0];
+    90→
+    91→  /* when the ServiceWorker API itself is missing the boot can never
+    92→     succeed in this browsing context (iOS in-app browser, private
+    93→     window, plain HTTP…) — swap the generic error for targeted,
+    94→     platform-correct recovery steps */
+    95→  const swGuidance: SwGuidance | null =
+    96→    proxyState === "error" &&
+    97→    typeof window !== "undefined" &&
+    98→    !proxyDiagnostics().serviceWorker
+    99→      ? swUnavailableGuidance()
+   100→      : null;
+   101→
+   102→  const copySiteLink = async () => {
+   103→    const url = swGuidance?.httpsHref ?? window.location.href;
+   104→    try {
+   105→      await navigator.clipboard.writeText(url);
+   106→      setLinkCopied(true);
+   107→      window.setTimeout(() => setLinkCopied(false), 2000);
+   108→    } catch {
+   109→      /* insecure contexts don't get the async clipboard — surface
+   110→         the URL as selectable text instead */
+   111→      setShowUrlFallback(true);
+   112→    }
+   113→  };
+   114→
+   115→  /* encoded iframe source for the active tab */
+   116→  const [frameSrc, setFrameSrc] = useState<string>("");
+   117→
+   118→  useEffect(() => {
+   119→    if (!activeId && tabs[0]) setActiveId(tabs[0].id);
+   120→  }, [activeId, tabs]);
+   121→
+   122→  useEffect(() => {
+   123→    setHistory(lsGet(HISTORY_KEY, []));
+   124→  }, []);
+   125→
+   126→  /* compute the scramjet-encoded src whenever the active tab url changes */
+   127→  useEffect(() => {
+   128→    let cancelled = false;
+   129→    if (!active?.url) {
+   130→      setFrameSrc("");
+   131→      setLoading(false);
+   132→      return;
+   133→    }
+   134→    if (proxyState === "error") {
+   135→      /* show the error screen instead of hammering a broken engine */
+   136→      setFrameSrc("");
+   137→      setLoading(false);
+   138→      return;
+   139→    }
+   140→    setLoading(true);
+   141→    const target = active.url; /* narrowed copy for the async closure */
+   142→    (async () => {
+   143→      try {
+   144→        const href = await proxiedHref(target);
+   145→        if (!cancelled) setFrameSrc(href);
+   146→      } catch {
+   147→        if (!cancelled) {
+   148→          setFrameSrc("");
+   149→          setLoading(false);
+   150→        }
+   151→      }
+   152→    })();
+   153→    if (loadTimer.current) clearTimeout(loadTimer.current);
+   154→    loadTimer.current = setTimeout(() => setLoading(false), 12000);
+   155→    return () => {
+   156→      cancelled = true;
+   157→    };
+   158→  }, [active?.url, active?.jar, activeId, proxyState]);
+   159→
+   160→  /* open targets pushed by Apps / Listen / Watch */
+   161→  useEffect(() => {
+   162→    if (!proxyTarget) return;
+   163→    navigate(proxyTarget.url);
+   164→    clearProxyTarget();
+   165→     
+   166→  }, [proxyTarget?.nonce]);
+   167→
+   168→  /* Ctrl+L focuses the address bar */
+   169→  useEffect(() => {
+   170→    const onKey = (e: KeyboardEvent) => {
+   171→      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "l") {
+   172→        e.preventDefault();
+   173→        inputRef.current?.focus();
+   174→        inputRef.current?.select();
+   175→      }
+   176→    };
+   177→    window.addEventListener("keydown", onKey);
+   178→    return () => window.removeEventListener("keydown", onKey);
+   179→  }, []);
+   180→
+   181→  function normalizeInput(input: string): string {
+   182→    const t = input.trim();
+   183→    if (!t) return "";
+   184→    if (/^https?:\/\//i.test(t)) return t;
+   185→    if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/.*)?$/.test(t)) return "https://" + t;
+   186→    const engine =
+   187→      SEARCH_ENGINES.find((e) => e.id === settings.searchEngine) ?? SEARCH_ENGINES[0];
+   188→    return engine.url.replace("%s", encodeURIComponent(t));
+   189→  }
+   190→
+   191→  const recordHistory = (url: string) => {
+   192→    const h = lsGet<typeof history>(HISTORY_KEY, []).filter((x) => x.url !== url);
+   193→    h.unshift({ url, title: url.replace(/^https?:\/\/(www\.)?/, "").split("/")[0], at: Date.now() });
+   194→    lsSet(HISTORY_KEY, h.slice(0, 100));
+   195→    setHistory(h.slice(0, 100));
+   196→  };
+   197→
+   198→  const navigate = (rawUrl: string, tabId?: string, pushHistory = true) => {
+   199→    const url = normalizeInput(rawUrl);
+   200→    if (!url) return;
+   201→    /* resolve the target tab — on first mount activeId is still empty */
+   202→    const target = tabId || activeId || tabs[0]?.id;
+   203→    if (!target) return;
+   204→    setTabs((cur) =>
+   205→      cur.map((t) => {
+   206→        if (t.id !== target) return t;
+   207→        if (pushHistory) {
+   208→          const stack = [...t.stack.slice(0, t.idx + 1), url];
+   209→          return { ...t, url, stack, idx: stack.length - 1, title: url.replace(/^https?:\/\/(www\.)?/, "").split("/")[0] };
+   210→        }
+   211→        return { ...t, url };
+   212→      })
+   213→    );
+   214→    recordHistory(url);
+   215→    setLoading(true);
+   216→  };
+   217→
+   218→  const go = () => navigate(addr);
+   219→
+   220→  const back = () => {
+   221→    if (!active || active.idx <= 0) return;
+   222→    const idx = active.idx - 1;
+   223→    setTabs((cur) =>
+   224→      cur.map((t) => (t.id === active.id ? { ...t, idx, url: t.stack[idx] } : t))
+   225→    );
+   226→    setLoading(true);
+   227→  };
+   228→
+   229→  const forward = () => {
+   230→    if (!active || active.idx >= active.stack.length - 1) return;
+   231→    const idx = active.idx + 1;
+   232→    setTabs((cur) =>
+   233→      cur.map((t) => (t.id === active.id ? { ...t, idx, url: t.stack[idx] } : t))
+   234→    );
+   235→    setLoading(true);
+   236→  };
+   237→
+   238→  const reload = () => {
+   239→    if (!active?.url) return;
+   240→    setLoading(true);
+   241→    setTabs((cur) =>
+   242→      cur.map((t) => (t.id === active.id ? { ...t, jar: uid() } : t))
+   243→    );
+   244→  };
+   245→
+   246→  const goHome = () => {
+   247→    setTabs((cur) =>
+   248→      cur.map((t) => (t.id === active.id ? { ...t, url: null, title: "New tab" } : t))
+   249→    );
+   250→    setAddr("");
+   251→  };
+   252→
+   253→  const addTab = () => {
+   254→    if (tabs.length >= 6) return;
+   255→    const t = newTab();
+   256→    setTabs((cur) => [...cur, t]);
+   257→    setActiveId(t.id);
+   258→    setAddr("");
+   259→  };
+   260→
+   261→  const closeTab = (id: string) => {
+   262→    setTabs((cur) => {
+   263→      const next = cur.filter((t) => t.id !== id);
+   264→      const result = next.length ? next : [newTab()];
+   265→      if (id === activeId) setActiveId(result[result.length - 1].id);
+   266→      return result;
+   267→    });
+   268→  };
+   269→
+   270→  const toggleFullscreen = async () => {
+   271→    if (!viewportRef.current) return;
+   272→    if (document.fullscreenElement) {
+   273→      await document.exitFullscreen();
+   274→      setFullscreen(false);
+   275→    } else {
+   276→      await viewportRef.current.requestFullscreen().catch(() => {});
+   277→      setFullscreen(true);
+   278→    }
+   279→  };
+   280→
+   281→  const clearHistory = () => {
+   282→    lsSet(HISTORY_KEY, []);
+   283→    setHistory([]);
+   284→    setShowHistory(false);
+   285→  };
+   286→
+   287→  const openProxiedNewTab = useCallback(async () => {
+   288→    if (!active?.url) return;
+   289→    try {
+   290→      /* v2 note: the SW routes this prefix back to THIS page's controller,
+   291→         so the companion tab serves as long as this page stays open */
+   292→      const href = await proxiedHref(active.url);
+   293→      window.open(href, "_blank");
+   294→    } catch {
+   295→      /* boot not ready */
+   296→    }
+   297→  }, [active?.url]);
+   298→
+   299→  return (
+   300→    <div className="flex-1 flex flex-col min-h-0">
+   301→      {/* tab bar */}
+   302→      <div className="flex items-center gap-1 px-2 pt-2 border-b border-[#141414] overflow-x-auto shrink-0" role="tablist" aria-label="Browser tabs">
+   303→        {tabs.map((t) => (
+   304→          <button
+   305→            key={t.id}
+   306→            role="tab"
+   307→            aria-selected={t.id === activeId}
+   308→            onClick={() => setActiveId(t.id)}
+   309→            className={`group flex items-center gap-2 pl-3 pr-1.5 py-2 rounded-t-lg border border-b-0 max-w-44 min-w-32 transition-colors ${
+   310→              t.id === activeId
+   311→                ? "bg-[#0a0a0a] border-[#1f1f1f] text-white"
+   312→                : "bg-transparent border-transparent text-[#8f8f8f] hover:text-white hover:bg-[#060606]"
+   313→            }`}
+   314→          >
+   315→            <Globe className="size-3.5 shrink-0 opacity-70" />
+   316→            <span className="text-xs truncate flex-1 text-left">{t.title}</span>
+   317→            <span
+   318→              role="button"
+   319→              tabIndex={0}
+   320→              aria-label={`Close tab ${t.title}`}
+   321→              onClick={(e) => {
+   322→                e.stopPropagation();
+   323→                closeTab(t.id);
+   324→              }}
+   325→              onKeyDown={(e) => {
+   326→                if (e.key === "Enter" || e.key === " ") {
+   327→                  e.stopPropagation();
+   328→                  closeTab(t.id);
+   329→                }
+   330→              }}
+   331→              className="p-1 rounded hover:bg-[#1c1c1c] opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+   332→            >
+   333→              <X className="size-3" />
+   334→            </span>
+   335→          </button>
+   336→        ))}
+   337→        <button
+   338→          onClick={addTab}
+   339→          disabled={tabs.length >= 6}
+   340→          aria-label="New tab"
+   341→          title="New tab"
+   342→          className="p-1.5 rounded-md text-[#8f8f8f] hover:text-white hover:bg-[#101010] disabled:opacity-30 shrink-0"
+   343→        >
+   344→          <Plus className="size-4" />
+   345→        </button>
+   346→      </div>
+   347→
+   348→      {/* toolbar */}
+   349→      <div className="flex items-center gap-1 px-2 py-2 border-b border-[#141414] shrink-0">
+   350→        <Button
+   351→          variant="ghost"
+   352→          size="icon"
+   353→          className="text-[#9a9a9a] hover:text-white hover:bg-[#101010] size-8"
+   354→          onClick={back}
+   355→          disabled={!active || active.idx <= 0}
+   356→          aria-label="Back"
+   357→          title="Back"
+   358→        >
+   359→          <ArrowLeft className="size-4" />
+   360→        </Button>
+   361→        <Button
+   362→          variant="ghost"
+   363→          size="icon"
+   364→          className="text-[#9a9a9a] hover:text-white hover:bg-[#101010] size-8"
+   365→          onClick={forward}
+   366→          disabled={!active || active.idx >= active.stack.length - 1}
+   367→          aria-label="Forward"
+   368→          title="Forward"
+   369→        >
+   370→          <ArrowRight className="size-4" />
+   371→        </Button>
+   372→        <Button
+   373→          variant="ghost"
+   374→          size="icon"
+   375→          className="text-[#9a9a9a] hover:text-white hover:bg-[#101010] size-8"
+   376→          onClick={reload}
+   377→          disabled={!active?.url}
+   378→          aria-label="Reload"
+   379→          title="Reload"
+   380→        >
+   381→          <RotateCw className={`size-4 ${loading ? "animate-spin" : ""}`} />
+   382→        </Button>
+   383→        <Button
+   384→          variant="ghost"
+   385→          size="icon"
+   386→          className="text-[#9a9a9a] hover:text-white hover:bg-[#101010] size-8"
+   387→          onClick={goHome}
+   388→          aria-label="New tab page"
+   389→          title="New tab page"
+   390→        >
+   391→          <Home className="size-4" />
+   392→        </Button>
+   393→
+   394→        <div className="relative flex-1 min-w-0">
+   395→          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-[#555] pointer-events-none" />
+   396→          <input
+   397→            ref={inputRef}
+   398→            value={addr}
+   399→            onChange={(e) => setAddr(e.target.value)}
+   400→            onKeyDown={(e) => {
+   401→              if (e.key === "Enter") go();
+   402→            }}
+   403→            placeholder={`Search ${SEARCH_ENGINES.find((e) => e.id === settings.searchEngine)?.label ?? "the web"} or enter address`}
+   404→            aria-label="Address bar"
+   405→            spellCheck={false}
+   406→            className="w-full h-9 rounded-full bg-[#050505] border border-[#1f1f1f] pl-9 pr-3 text-[13px] text-white placeholder:text-[#555] outline-none focus:border-[#3a3a3a] focus:ring-1 focus:ring-white/20"
+   407→          />
+   408→          {loading && (
+   409→            <div className="absolute -bottom-2 left-4 right-4 h-[2px] bg-[#141414] overflow-hidden rounded-full">
+   410→              <div
+   411→                className="h-full w-1/2 bg-white"
+   412→                style={{ animation: "boot-bar 1s ease-in-out infinite alternate" }}
+   413→              />
+   414→            </div>
+   415→          )}
+   416→        </div>
+   417→
+   418→        <div className="relative">
+   419→          <Button
+   420→            variant="ghost"
+   421→            size="icon"
+   422→            className="text-[#9a9a9a] hover:text-white hover:bg-[#101010] size-8"
+   423→            onClick={() => {
+   424→              setHistory(lsGet(HISTORY_KEY, []));
+   425→              setShowHistory((s) => !s);
+   426→            }}
+   427→            aria-label="History"
+   428→            title="History"
+   429→          >
+   430→            <HistoryIcon className="size-4" />
+   431→          </Button>
+   432→          {showHistory && (
+   433→            <div className="absolute right-0 top-10 z-30 w-80 max-w-[90vw] rounded-lg border border-[#1f1f1f] bg-[#0a0a0a] shadow-xl p-2">
+   434→              <div className="flex items-center justify-between px-2 py-1.5">
+   435→                <span className="mono-label">recent history</span>
+   436→                <button
+   437→                  className="text-[10px] text-[#777] hover:text-white u-link"
+   438→                  onClick={clearHistory}
+   439→                >
+   440→                  clear
+   441→                </button>
+   442→              </div>
+   443→              <div className="max-h-72 overflow-y-auto">
+   444→                {history.length === 0 ? (
+   445→                  <p className="text-xs text-[#666] px-2 py-3">
+   446→                    Nothing yet — pages you open appear here (stored locally only).
+   447→                  </p>
+   448→                ) : (
+   449→                  history.slice(0, 20).map((h, i) => (
+   450→                    <button
+   451→                      key={i}
+   452→                      onClick={() => {
+   453→                        navigate(h.url);
+   454→                        setShowHistory(false);
+   455→                      }}
+   456→                      className="w-full text-left px-2 py-2 rounded-md hover:bg-[#141414] group"
+   457→                    >
+   458→                      <div className="text-xs text-white truncate">{h.title}</div>
+   459→                      <div className="text-[10px] text-[#666] truncate flex items-center gap-1">
+   460→                        <Clock className="size-2.5" />
+   461→                        {new Date(h.at).toLocaleString()} · {h.url}
+   462→                      </div>
+   463→                    </button>
+   464→                  ))
+   465→                )}
+   466→              </div>
+   467→            </div>
+   468→          )}
+   469→        </div>
+   470→
+   471→        {active?.url && (
+   472→          <Button
+   473→            variant="ghost"
+   474→            size="icon"
+   475→            className="text-[#9a9a9a] hover:text-white hover:bg-[#101010] size-8"
+   476→            onClick={() => void openProxiedNewTab()}
+   477→            aria-label="Open in a new browser tab (still proxied)"
+   478→            title="Open in new tab (proxied)"
+   479→          >
+   480→            <ExternalLink className="size-4" />
+   481→          </Button>
+   482→        )}
+   483→        <Button
+   484→          variant="ghost"
+   485→          size="icon"
+   486→          className="text-[#9a9a9a] hover:text-white hover:bg-[#101010] size-8"
+   487→          onClick={toggleFullscreen}
+   488→          aria-label="Toggle fullscreen"
+   489→          title="Fullscreen"
+   490→        >
+   491→          {fullscreen ? <Minimize className="size-4" /> : <Maximize2 className="size-4" />}
+   492→        </Button>
+   493→      </div>
+   494→
+   495→      {/* viewport */}
+   496→      <div ref={viewportRef} className="flex-1 min-h-0 relative bg-black">
+   497→        {active && frameSrc ? (
+   498→          <iframe
+   499→            key={active.id + active.jar}
+   500→            src={frameSrc}
+   501→            className="w-full h-full border-0 bg-black"
+   502→            title={active.title}
+   503→            onLoad={() => setLoading(false)}
+   504→            allow="autoplay; fullscreen; clipboard-write; encrypted-media; gamepad; xr-spatial-tracking"
+   505→          />
+   506→        ) : active?.url ? (
+   507→          /* booting the engine or proxy error */
+   508→          <div className="h-full flex flex-col items-center justify-center gap-4 text-center px-6">
+   509→            {proxyState === "error" ? (
+   510→              <>
+   511→                <ShieldAlert className="size-10 text-white" />
+   512→                <h2 className="text-base font-semibold text-white">
+   513→                  {proxyStage === "transport" ? "Proxy transport failed" : "Proxy engine failed to start"}
+   514→                </h2>
+   515→                {swGuidance ? (
+   516→                  <>
+   517→                    <p className="text-[13px] text-[#8f8f8f] max-w-md">{swGuidance.cause}</p>
+   518→                    <ol className="text-[13px] text-[#c9c9c9] max-w-md text-left space-y-1.5 list-decimal list-inside leading-relaxed">
+   519→                      {swGuidance.steps.map((step, i) => (
+   520→                        <li key={i}>{step}</li>
+   521→                      ))}
+   522→                    </ol>
+   523→                    <div className="flex flex-wrap items-center justify-center gap-2 mt-1">
+   524→                      {swGuidance.httpsHref && (
+   525→                        <a
+   526→                          href={swGuidance.httpsHref}
+   527→                          className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-[13px] font-medium text-black hover:bg-[#e0e0e0]"
+   528→                        >
+   529→                          <Lock className="size-4" /> Open HTTPS version
+   530→                        </a>
+   531→                      )}
+   532→                      {swGuidance.copyLink && (
+   533→                        <Button
+   534→                          variant="outline"
+   535→                          onClick={copySiteLink}
+   536→                          className="border-[#262626] bg-transparent text-[#ccc] hover:bg-[#101010] hover:text-white"
+   537→                        >
+   538→                          {linkCopied ? (
+   539→                            <>
+   540→                              <Check className="size-4 mr-2" /> Link copied
+   541→                            </>
+   542→                          ) : (
+   543→                            <>
+   544→                              <Copy className="size-4 mr-2" /> Copy site link
+   545→                            </>
+   546→                          )}
+   547→                        </Button>
+   548→                      )}
+   549→                    </div>
+   550→                    {showUrlFallback && (
+   551→                      <p className="text-[12px] text-[#8f8f8f] max-w-md break-all select-all font-mono">
+   552→                        {swGuidance.httpsHref ?? window.location.href}
+   553→                      </p>
+   554→                    )}
+   555→                  </>
+   556→                ) : (
+   557→                  <p className="text-[13px] text-[#8f8f8f] max-w-md">{proxyError}</p>
+   558→                )}
+   559→                {proxyDiag && (
+   560→                  <p className="text-[11px] text-[#555] font-mono max-w-md">{proxyDiag}</p>
+   561→                )}
+   562→                <div className="flex items-center gap-2 mt-1">
+   563→                  <Button
+   564→                    onClick={() => {
+   565→                      resetProxy();
+   566→                      retryProxy();
+   567→                    }}
+   568→                    className="bg-white text-black hover:bg-[#e0e0e0]"
+   569→                  >
+   570→                    <RotateCw className="size-4 mr-2" /> Retry
+   571→                  </Button>
+   572→                  <Button
+   573→                    variant="outline"
+   574→                    onClick={() => window.location.reload()}
+   575→                    className="border-[#262626] bg-transparent text-[#ccc] hover:bg-[#101010] hover:text-white"
+   576→                  >
+   577→                    Reload page
+   578→                  </Button>
+   579→                </div>
+   580→                {!swGuidance && (
+   581→                  <p className="text-[11px] text-[#4a4a4a] max-w-md mt-2 leading-relaxed">
+   582→                    If it keeps failing, try another browser (Chrome / Edge / Firefox), disable
+   583→                    ad-blockers for this site, or allow site data in your browser settings.
+   584→                  </p>
+   585→                )}
+   586→              </>
+   587→            ) : (
+   588→              <>
+   589→                <Loader2 className="size-8 text-white animate-spin" />
+   590→                <p className="text-[13px] text-[#8f8f8f]">
+   591→                  Starting Scramjet engine ({settings.transport} transport)…
+   592→                </p>
+   593→              </>
+   594→            )}
+   595→          </div>
+   596→        ) : (
+   597→          /* new tab page */
+   598→          <div className="h-full overflow-y-auto">
+   599→            <div className="max-w-2xl mx-auto px-4 py-12 sm:py-16">
+   600→              <div className="text-center mb-8">
+   601→                <div className="inline-flex items-center gap-2 text-white text-lg font-semibold">
+   602→                  <Globe className="size-5" /> Memphis Browser
+   603→                </div>
+   604→                <p className="text-xs text-[#7a7a7a] mt-2">
+   605→                  Scramjet engine · {settings.transport} transport · full JS/WebSocket support ·
+   606→                  sites render exactly as they would directly.
+   607→                </p>
+   608→              </div>
+   609→              <form
+   610→                onSubmit={(e) => {
+   611→                  e.preventDefault();
+   612→                  go();
+   613→                }}
+   614→                className="relative mb-10"
+   615→              >
+   616→                <Search className="absolute left-4 top-1/2 -translate-y-1/2 size-4 text-[#555]" />
+   617→                <input
+   618→                  value={addr}
+   619→                  onChange={(e) => setAddr(e.target.value)}
+   620→                  placeholder={`Search ${SEARCH_ENGINES.find((e) => e.id === settings.searchEngine)?.label ?? "the web"} or type a URL`}
+   621→                  aria-label="Search or enter address"
+   622→                  className="w-full h-12 rounded-full bg-[#050505] border border-[#1f1f1f] pl-11 pr-4 text-sm text-white placeholder:text-[#555] outline-none focus:border-[#3a3a3a]"
+   623→                />
+   624→              </form>
+   625→              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 mb-10">
+   626→                {QUICK_LINKS.map((q) => (
+   627→                  <button
+   628→                    key={q.url}
+   629→                    onClick={() => navigate(q.url)}
+   630→                    className="rounded-lg border border-[#1a1a1a] bg-[#080808] hover:border-[#333] transition-colors p-4 text-left"
+   631→                  >
+   632→                    <div className="text-sm text-white">{q.name}</div>
+   633→                    <div className="text-[11px] text-[#666] mt-0.5">{q.hint}</div>
+   634→                  </button>
+   635→                ))}
+   636→              </div>
+   637→              {history.length > 0 && (
+   638→                <div>
+   639→                  <div className="mono-label mb-2">continue where you left off</div>
+   640→                  <div className="flex flex-wrap gap-1.5">
+   641→                    {history.slice(0, 8).map((h, i) => (
+   642→                      <button
+   643→                        key={i}
+   644→                        onClick={() => navigate(h.url)}
+   645→                        className="px-2.5 py-1.5 rounded-full border border-[#222] text-[11px] text-[#9a9a9a] hover:text-white hover:border-[#3a3a3a] max-w-56 truncate"
+   646→                      >
+   647→                        {h.title}
+   648→                      </button>
+   649→                    ))}
+   650→                  </div>
+   651→                </div>
+   652→              )}
+   653→            </div>
+   654→          </div>
+   655→        )}
+   656→      </div>
+   657→
+   658→      {/* status strip */}
+   659→      <div className="flex items-center gap-3 px-3 h-7 border-t border-[#141414] text-[10px] text-[#555] font-mono shrink-0">
+   660→        <span className="flex items-center gap-1">
+   661→          {proxyState === "ready" ? (
+   662→            <ShieldCheck className="size-3 text-white" />
+   663→          ) : (
+   664→            <ShieldAlert className="size-3" />
+   665→          )}
+   666→          scramjet · {settings.transport}
+   667→        </span>
+   668→        <span className="hidden sm:inline">· wisp relay</span>
+   669→        {proxyState === "ready" && <span className="hidden sm:inline">· sw active</span>}
+   670→        <span className="flex-1" />
+   671→        <span>
+   672→          {proxyState === "error"
+   673→            ? "engine failed"
+   674→            : active?.url
+   675→              ? `${loading ? "loading…" : "ready"}`
+   676→              : "new tab"}
+   677→        </span>
+   678→      </div>
+   679→    </div>
+   680→  );
+   681→}
+   682→

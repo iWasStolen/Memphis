@@ -293,7 +293,7 @@ export default function AppShell() {
   }, [setView, openModal]);
 
   return (
-    <div className="min-h-screen flex flex-col bg-black text-white relative">
+    <div className="h-dvh flex flex-col bg-black text-white relative overflow-hidden">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:bg-white focus:text-black focus:px-3 focus:py-1.5 focus:rounded-md focus:text-sm"
@@ -302,7 +302,10 @@ export default function AppShell() {
       </a>
       <BootScreen />
       <Header />
-      <main id="main" className="flex-1 flex flex-col min-h-0 relative z-[1]">
+      <main
+        id="main"
+        className="flex-1 flex flex-col min-h-0 relative z-[1] overflow-y-auto"
+      >
         {view === "home" && <HomeView />}
         {view === "play" && <PlayView />}
         {view === "apps" && <AppsView />}
