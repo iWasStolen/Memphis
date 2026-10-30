@@ -1,0 +1,800 @@
+   931→    setSavingInstructions(true);
+   932→    try {
+   933→      const r = await fetch(
+   934→        `/api/ai/conversations/${activeId}?sessionId=${encodeURIComponent(aiSessionId())}`,
+   935→        {
+   936→          method: "PATCH",
+   937→          headers: { "content-type": "application/json" },
+   938→          body: JSON.stringify({ instructions: instructionsDraft }),
+   939→        }
+   940→      );
+   941→      if (!r.ok) {
+   942→        const data = (await r.json().catch(() => ({}))) as { error?: string };
+   943→        setError(data.error || "Could not save instructions.");
+   944→        return;
+   945→      }
+   946→      setInstructions(instructionsDraft);
+   947→    } catch {
+   948→      setError("Could not save instructions — check your connection.");
+   949→    } finally {
+   950→      setSavingInstructions(false);
+   951→    }
+   952→  };
+   953→
+   954→  const deleteConversation = async (id: string) => {
+   955→    try {
+   956→      await fetch(
+   957→        `/api/ai/conversations/${id}?sessionId=${encodeURIComponent(aiSessionId())}`,
+   958→        { method: "DELETE" }
+   959→      );
+   960→    } catch { /* offline — keep the row; next reload re-syncs */ }
+   961→    if (activeId === id) newChat();
+   962→    void loadConversations();
+   963→  };
+   964→
+   965→  const generateFlashcards = async () => {
+   966→    if (genCards) return;
+   967→    if (!messages.length) {
+   968→      setError("Chat about a topic first, then build flashcards from it.");
+   969→      return;
+   970→    }
+   971→    setGenCards(true);
+   972→    setError("");
+   973→    try {
+   974→      const r = await fetch("/api/ai/flashcards", {
+   975→        method: "POST",
+   976→        headers: { "content-type": "application/json" },
+   977→        body: JSON.stringify({ sessionId: aiSessionId(), conversationId: activeId }),
+   978→      });
+   979→      const data = (await r.json().catch(() => ({}))) as { cards?: Flashcard[]; error?: string };
+   980→      if (r.ok && data.cards?.length) {
+   981→        const next = [...data.cards, ...cards].slice(0, 120);
+   982→        setCards(next);
+   983→        lsSet(FLASHCARD_KEY, next);
+   984→        setCardIdx(0);
+   985→        setCardFlipped(false);
+   986→        setShowCards(true);
+   987→      } else {
+   988→        setError(data.error || "Could not build flashcards — try again.");
+   989→      }
+   990→    } catch {
+   991→      setError("Could not build flashcards — check your connection.");
+   992→    } finally {
+   993→      setGenCards(false);
+   994→    }
+   995→  };
+   996→
+   997→  const copyMessage = async (id: string, content: string) => {
+   998→    try {
+   999→      await navigator.clipboard.writeText(content);
+  1000→      setCopiedId(id);
+  1001→      setTimeout(() => setCopiedId(null), 1500);
+  1002→    } catch {
+  1003→      /* clipboard unavailable */
+  1004→    }
+  1005→  };
+  1006→
+  1007→  /* ---------- render ---------- */
+  1008→  const card = cards[cardIdx];
+  1009→  let lastAssistantIdx = -1;
+  1010→  for (let i = messages.length - 1; i >= 0; i--) {
+  1011→    if (messages[i].role === "assistant") {
+  1012→      lastAssistantIdx = i;
+  1013→      break;
+  1014→    }
+  1015→  }
+  1016→  const busyLabel =
+  1017→    status && STATUS_LABEL[status]
+  1018→      ? STATUS_LABEL[status]
+  1019→      : sending
+  1020→        ? "thinking"
+  1021→        : "";
+  1022→
+  1023→  return (
+  1024→    <div
+  1025→      className="flex-1 flex min-h-0 relative"
+  1026→      onDragOver={(e) => {
+  1027→        e.preventDefault();
+  1028→        setDragging(true);
+  1029→      }}
+  1030→      onDragLeave={(e) => {
+  1031→        if (e.currentTarget === e.target) setDragging(false);
+  1032→      }}
+  1033→      onDrop={onDrop}
+  1034→    >
+  1035→      {/* drag overlay */}
+  1036→      {dragging && (
+  1037→        <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+  1038→          <div className="border-2 border-dashed border-white/50 rounded-2xl px-10 py-8 text-center">
+  1039→            <Paperclip className="size-8 mx-auto text-white mb-3" />
+  1040→            <p className="text-white font-semibold">Drop files to attach</p>
+  1041→            <p className="text-[12px] text-[#999] mt-1">
+  1042→              PDFs, docs, sheets, images, audio, video, code — anything
+  1043→            </p>
+  1044→          </div>
+  1045→        </div>
+  1046→      )}
+  1047→
+  1048→      {/* sidebar */}
+  1049→      <aside
+  1050→        className={`${sidebarOpen ? "flex" : "hidden"} md:flex absolute md:relative inset-0 md:inset-auto z-30 md:z-auto bg-black/95 md:bg-transparent flex-col w-64 md:w-60 shrink-0 border-r border-[#141414]`}
+  1051→      >
+  1052→        <div className="p-3 border-b border-[#141414] flex gap-2">
+  1053→          <Button
+  1054→            onClick={newChat}
+  1055→            className="flex-1 bg-white text-black hover:bg-[#e0e0e0]"
+  1056→            size="sm"
+  1057→          >
+  1058→            <Plus className="size-4 mr-1" /> New chat
+  1059→          </Button>
+  1060→          <Button
+  1061→            variant="outline"
+  1062→            size="icon"
+  1063→            className="md:hidden border-[#2a2a2a] text-white"
+  1064→            onClick={() => setSidebarOpen(false)}
+  1065→            aria-label="Close conversation list"
+  1066→          >
+  1067→            <ChevronRight className="size-4" />
+  1068→          </Button>
+  1069→        </div>
+  1070→        <div className="flex-1 overflow-y-auto p-2 memphis-scroll">
+  1071→          <p className="mono-label px-2 py-1">Your chats</p>
+  1072→          {conversations.length === 0 && (
+  1073→            <p className="text-[12px] text-[#555] px-2 py-2">
+  1074→              Your conversations appear here — saved on this Memphis server for your browser
+  1075→              session.
+  1076→            </p>
+  1077→          )}
+  1078→          {conversations.map((c) => (
+  1079→            <div key={c.id} className="group flex items-center">
+  1080→              {renaming === c.id ? (
+  1081→                <input
+  1082→                  autoFocus
+  1083→                  value={renameDraft}
+  1084→                  onChange={(e) => setRenameDraft(e.target.value)}
+  1085→                  onKeyDown={(e) => {
+  1086→                    if (e.key === "Enter") {
+  1087→                      e.preventDefault();
+  1088→                      void commitRename(c.id);
+  1089→                    }
+  1090→                    if (e.key === "Escape") {
+  1091→                      e.preventDefault();
+  1092→                      setRenaming(null);
+  1093→                    }
+  1094→                  }}
+  1095→                  onBlur={() => void commitRename(c.id)}
+  1096→                  maxLength={60}
+  1097→                  aria-label="Rename chat"
+  1098→                  className="flex-1 min-w-0 px-2 py-1.5 rounded-md bg-[#141414] border border-[#333] text-[13px] text-white outline-none focus:border-[#555]"
+  1099→                />
+  1100→              ) : (
+  1101→                <>
+  1102→                  <button
+  1103→                    onClick={() => {
+  1104→                      setActiveId(c.id);
+  1105→                      setSidebarOpen(false);
+  1106→                    }}
+  1107→                    className={`flex-1 text-left px-2 py-1.5 rounded-md text-[13px] truncate transition-colors ${
+  1108→                      activeId === c.id
+  1109→                        ? "bg-[#141414] text-white"
+  1110→                        : "text-[#9a9a9a] hover:bg-[#0d0d0d] hover:text-white"
+  1111→                    }`}
+  1112→                  >
+  1113→                    {c.title}
+  1114→                  </button>
+  1115→                  <button
+  1116→                    onClick={() => {
+  1117→                      setRenaming(c.id);
+  1118→                      setRenameDraft(c.title);
+  1119→                    }}
+  1120→                    aria-label={`Rename ${c.title}`}
+  1121→                    title="Rename chat"
+  1122→                    className="opacity-0 group-hover:opacity-100 p-1.5 text-[#666] hover:text-white"
+  1123→                  >
+  1124→                    <Pencil className="size-3.5" />
+  1125→                  </button>
+  1126→                  <button
+  1127→                    onClick={() => void deleteConversation(c.id)}
+  1128→                    aria-label={`Delete ${c.title}`}
+  1129→                    className="opacity-0 group-hover:opacity-100 p-1.5 text-[#666] hover:text-white"
+  1130→                  >
+  1131→                    <Trash2 className="size-3.5" />
+  1132→                  </button>
+  1133→                </>
+  1134→              )}
+  1135→            </div>
+  1136→          ))}
+  1137→        </div>
+  1138→        <div className="p-3 border-t border-[#141414] flex items-center gap-1.5 text-[11px] text-[#777]">
+  1139→          <InfinityIcon className="size-3.5" />
+  1140→          GLM · free · unlimited
+  1141→        </div>
+  1142→      </aside>
+  1143→
+  1144→      {/* main */}
+  1145→      <div className="flex-1 flex flex-col min-w-0">
+  1146→        <div className="border-b border-[#141414] px-4 py-2.5 flex items-center gap-2">
+  1147→          <Button
+  1148→            variant="ghost"
+  1149→            size="icon"
+  1150→            className="md:hidden text-white size-8"
+  1151→            onClick={() => setSidebarOpen(true)}
+  1152→            aria-label="Open conversation list"
+  1153→          >
+  1154→            <Menu className="size-4" />
+  1155→          </Button>
+  1156→          <Sparkles className="size-4 text-white" />
+  1157→          <h1 className="text-sm font-semibold text-white">Memphis AI</h1>
+  1158→          <span className="text-[11px] text-[#555] hidden lg:inline">
+  1159→            files · vision · voice · search · images · reasoning
+  1160→          </span>
+  1161→          <div className="ml-auto flex items-center gap-2">
+  1162→            {messages.length > 0 && (
+  1163→              <Button
+  1164→                variant="outline"
+  1165→                size="sm"
+  1166→                onClick={exportChat}
+  1167→                className="border-[#2a2a2a] text-white hover:bg-[#101010]"
+  1168→              >
+  1169→                <Download className="size-4 mr-1" />
+  1170→                <span className="hidden sm:inline">Export</span>
+  1171→              </Button>
+  1172→            )}
+  1173→            <Button
+  1174→              variant="outline"
+  1175→              size="sm"
+  1176→              onClick={() => void generateFlashcards()}
+  1177→              disabled={genCards}
+  1178→              className="border-[#2a2a2a] text-white hover:bg-[#101010]"
+  1179→            >
+  1180→              <Layers className="size-4 mr-1" />
+  1181→              {genCards ? "Building…" : "Flashcards"}
+  1182→            </Button>
+  1183→            {cards.length > 0 && (
+  1184→              <Button
+  1185→                variant="ghost"
+  1186→                size="sm"
+  1187→                onClick={() => {
+  1188→                  setCardIdx(0);
+  1189→                  setCardFlipped(false);
+  1190→                  setShowCards(true);
+  1191→                }}
+  1192→                className="text-[#9a9a9a] hover:text-white"
+  1193→              >
+  1194→                Study ({cards.length})
+  1195→              </Button>
+  1196→            )}
+  1197→          </div>
+  1198→        </div>
+  1199→
+  1200→        {/* messages */}
+  1201→        <div className="flex-1 overflow-y-auto memphis-scroll">
+  1202→          <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+  1203→            {messages.length === 0 && !sending && (
+  1204→              <div className="text-center py-12">
+  1205→                <Sparkles className="size-7 mx-auto text-[#555] mb-3" />
+  1206→                <h2 className="text-lg text-white font-semibold">How can I help today?</h2>
+  1207→                <p className="text-[13px] text-[#777] mt-2">
+  1208→                  A real AI chat running on GLM — free, unlimited, no account needed.
+  1209→                </p>
+  1210→                <div className="mt-3 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] text-[#666]">
+  1211→                  <span className="inline-flex items-center gap-1"><Paperclip className="size-3" /> any file</span>
+  1212→                  <span className="inline-flex items-center gap-1"><ImageIcon className="size-3" /> vision</span>
+  1213→                  <span className="inline-flex items-center gap-1"><Mic className="size-3" /> voice</span>
+  1214→                  <span className="inline-flex items-center gap-1"><Globe className="size-3" /> web search</span>
+  1215→                  <span className="inline-flex items-center gap-1"><Palette className="size-3" /> images</span>
+  1216→                  <span className="inline-flex items-center gap-1"><Brain className="size-3" /> reasoning</span>
+  1217→                </div>
+  1218→                <div className="mt-6 grid sm:grid-cols-2 gap-2 text-left">
+  1219→                  {[
+  1220→                    "Summarize a PDF — attach it below",
+  1221→                    "Search the web for today's tech news",
+  1222→                    "Generate an image of a neon city at night",
+  1223→                    "Explain the Monty Hall problem step by step",
+  1224→                  ].map((s) => (
+  1225→                    <button
+  1226→                      key={s}
+  1227→                      onClick={() => setInput(s)}
+  1228→                      className="text-[13px] text-[#c9c9c9] border border-[#1a1a1a] bg-[#080808] rounded-lg p-3 hover:border-[#3a3a3a] hover:bg-[#0d0d0d] transition-colors"
+  1229→                    >
+  1230→                      {s}
+  1231→                    </button>
+  1232→                  ))}
+  1233→                </div>
+  1234→              </div>
+  1235→            )}
+  1236→            {messages.map((m, idx) => (
+  1237→              <div
+  1238→                key={m.id}
+  1239→                className={m.role === "user" ? "flex justify-end" : "flex"}
+  1240→              >
+  1241→                <div
+  1242→                  className={`group relative max-w-[88%] rounded-xl px-3.5 py-2.5 ${
+  1243→                    m.role === "user"
+  1244→                      ? "bg-white text-black"
+  1245→                      : "bg-[#0d0d0d] text-[#dcdcdc] border border-[#1a1a1a]"
+  1246→                  }`}
+  1247→                >
+  1248→                  {m.role === "user" ? (
+  1249→                    <>
+  1250→                      {m.attachments && m.attachments.length > 0 && (
+  1251→                        <div className="flex flex-wrap gap-1.5 mb-2">
+  1252→                          {m.attachments.map((a) => (
+  1253→                            <AttChip key={a.id} att={a} />
+  1254→                          ))}
+  1255→                        </div>
+  1256→                      )}
+  1257→                      <p className="text-[13.5px] leading-relaxed whitespace-pre-wrap break-words">
+  1258→                        {m.content}
+  1259→                      </p>
+  1260→                      {!sending && !m.id.startsWith("local-") && editing?.id !== m.id && (
+  1261→                        <button
+  1262→                          onClick={() => startEdit(m)}
+  1263→                          aria-label="Edit and resend"
+  1264→                          title="Edit & resend"
+  1265→                          className="absolute -bottom-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity bg-[#161616] border border-[#262626] rounded p-1 text-[#888] hover:text-white"
+  1266→                        >
+  1267→                          <Pencil className="size-3" />
+  1268→                        </button>
+  1269→                      )}
+  1270→                    </>
+  1271→                  ) : m.content ? (
+  1272→                    <>
+  1273→                      {m.reasoning ? (
+  1274→                        <ThinkBlock text={m.reasoning} streaming={m.streaming} />
+  1275→                      ) : null}
+  1276→                      <Md text={m.content} />
+  1277→                    </>
+  1278→                  ) : (
+  1279→                    <>
+  1280→                      {m.reasoning ? <ThinkBlock text={m.reasoning} streaming /> : null}
+  1281→                      <span className="flex items-center gap-1.5 text-[13px] text-[#777]">
+  1282→                        <span className="boot-pulse">{busyLabel || "thinking"}</span>
+  1283→                        <span className="flex gap-0.5">
+  1284→                          {[0, 1, 2].map((i) => (
+  1285→                            <span
+  1286→                              key={i}
+  1287→                              className="size-1 rounded-full bg-[#777]"
+  1288→                              style={{ animation: `blink 1.2s ${i * 0.2}s infinite` }}
+  1289→                            />
+  1290→                          ))}
+  1291→                        </span>
+  1292→                      </span>
+  1293→                    </>
+  1294→                  )}
+  1295→                  {m.role === "assistant" && m.content && !m.streaming && (
+  1296→                    <div className="absolute -bottom-2 right-2 z-10 flex gap-0.5">
+  1297→                      {idx === lastAssistantIdx && !sending && (
+  1298→                        <button
+  1299→                          onClick={() => void regenerate()}
+  1300→                          aria-label="Regenerate reply"
+  1301→                          title="Regenerate"
+  1302→                          className="opacity-0 group-hover:opacity-100 transition-opacity bg-[#161616] border border-[#262626] rounded p-1 text-[#888] hover:text-white"
+  1303→                        >
+  1304→                          <RotateCcw className="size-3" />
+  1305→                        </button>
+  1306→                      )}
+  1307→                      <button
+  1308→                        onClick={() => void speak(m)}
+  1309→                        aria-label={speaking?.id === m.id ? "Stop reading aloud" : "Read aloud"}
+  1310→                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-[#161616] border border-[#262626] rounded p-1 text-[#888] hover:text-white"
+  1311→                      >
+  1312→                        {speaking?.id === m.id ? (
+  1313→                          speaking.loading ? (
+  1314→                            <Loader2 className="size-3 animate-spin" />
+  1315→                          ) : (
+  1316→                            <Volume2 className="size-3 text-white" />
+  1317→                          )
+  1318→                        ) : (
+  1319→                          <Volume2 className="size-3" />
+  1320→                        )}
+  1321→                      </button>
+  1322→                      <button
+  1323→                        onClick={() => void copyMessage(m.id, m.content)}
+  1324→                        aria-label="Copy message"
+  1325→                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-[#161616] border border-[#262626] rounded p-1 text-[#888] hover:text-white"
+  1326→                      >
+  1327→                        {copiedId === m.id ? (
+  1328→                          <Check className="size-3" />
+  1329→                        ) : (
+  1330→                          <Copy className="size-3" />
+  1331→                        )}
+  1332→                      </button>
+  1333→                    </div>
+  1334→                  )}
+  1335→                </div>
+  1336→              </div>
+  1337→            ))}
+  1338→            {/* follow-up suggestion chips for the latest reply */}
+  1339→            {suggestions &&
+  1340→              suggestions.items.length > 0 &&
+  1341→              !sending &&
+  1342→              messages[messages.length - 1]?.id === suggestions.forId && (
+  1343→                <div className="flex flex-col sm:flex-row sm:flex-wrap gap-1.5 pt-1">
+  1344→                  {suggestions.items.map((s) => (
+  1345→                    <button
+  1346→                      key={s}
+  1347→                      onClick={() => {
+  1348→                        setInput(s);
+  1349→                        inputRef.current?.focus();
+  1350→                      }}
+  1351→                      className="text-left text-[12.5px] text-[#b5b5b5] border border-[#1e1e1e] bg-[#0a0a0a] rounded-lg px-2.5 py-1.5 hover:border-[#3a3a3a] hover:text-white transition-colors inline-flex items-center gap-1.5 max-w-full"
+  1352→                    >
+  1353→                      <CornerDownRight className="size-3 shrink-0 text-[#666]" />
+  1354→                      <span className="truncate">{s}</span>
+  1355→                    </button>
+  1356→                  ))}
+  1357→                </div>
+  1358→              )}
+  1359→            <div ref={bottomRef} />
+  1360→          </div>
+  1361→        </div>
+  1362→
+  1363→        {/* custom instructions */}
+  1364→        {instructions && (
+  1365→          <div className="px-4 py-2 border-t border-[#141414] bg-[#050505]">
+  1366→            <p className="text-[11px] text-[#666]">
+  1367→              <span className="font-mono uppercase tracking-wider">custom instructions:</span>{" "}
+  1368→              {instructions}
+  1369→            </p>
+  1370→          </div>
+  1371→        )}
+  1372→
+  1373→        {error && (
+  1374→          <div className="px-4 py-2 border-t border-[#141414]">
+  1375→            <p className="text-[12px] text-white bg-[#161616] border border-[#333] rounded px-2.5 py-1.5">
+  1376→              {error}
+  1377→            </p>
+  1378→          </div>
+  1379→        )}
+  1380→
+  1381→        {/* composer */}
+  1382→        <div className="border-t border-[#141414] p-3">
+  1383→          <div className="max-w-2xl mx-auto">
+  1384→            <div
+  1385→              className={`rounded-xl border bg-[#0a0a0a] transition-colors ${
+  1386→                dragging ? "border-white/60" : "border-[#1f1f1f] focus-within:border-[#333]"
+  1387→              }`}
+  1388→            >
+  1389→              {/* edit-mode banner */}
+  1390→              {editing && (
+  1391→                <div className="flex items-center gap-2 px-3 pt-3">
+  1392→                  <span className="inline-flex items-center gap-1.5 text-[11.5px] text-[#ddd] bg-[#161616] border border-[#333] rounded-md px-2 py-1">
+  1393→                    <Pencil className="size-3" /> Editing message
+  1394→                  </span>
+  1395→                  <span className="text-[11.5px] text-[#777]">Enter to resend · Esc to cancel</span>
+  1396→                  <button
+  1397→                    onClick={cancelEdit}
+  1398→                    aria-label="Cancel edit"
+  1399→                    className="ml-auto p-1 text-[#888] hover:text-white"
+  1400→                  >
+  1401→                    <X className="size-3.5" />
+  1402→                  </button>
+  1403→                </div>
+  1404→              )}
+  1405→
+  1406→              {/* upload progress chips */}
+  1407→              {uploading.length > 0 && (
+  1408→                <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+  1409→                  {uploading.map((u) => (
+  1410→                    <span
+  1411→                      key={u.key}
+  1412→                      className="inline-flex items-center gap-1.5 max-w-[220px] rounded-lg border border-[#262626] bg-[#111] px-2 py-1 text-[11.5px] text-[#ccc]"
+  1413→                    >
+  1414→                      <Loader2 className="size-3.5 shrink-0 animate-spin text-[#8a8a8a]" />
+  1415→                      <span className="truncate">{u.name}</span>
+  1416→                      <span className="shrink-0 text-[#666] font-mono">{u.pct}%</span>
+  1417→                    </span>
+  1418→                  ))}
+  1419→                </div>
+  1420→              )}
+  1421→
+  1422→              {/* attached file chips */}
+  1423→              {attached.length > 0 && (
+  1424→                <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+  1425→                  {attached.map((a) => (
+  1426→                    <AttChip
+  1427→                      key={a.id}
+  1428→                      att={a}
+  1429→                      onRemove={() => setAttached((list) => list.filter((x) => x.id !== a.id))}
+  1430→                    />
+  1431→                  ))}
+  1432→                </div>
+  1433→              )}
+  1434→
+  1435→              <Textarea
+  1436→                ref={inputRef}
+  1437→                value={input}
+  1438→                onChange={(e) => setInput(e.target.value)}
+  1439→                onKeyDown={(e) => {
+  1440→                  if (e.key === "Enter" && !e.shiftKey) {
+  1441→                    e.preventDefault();
+  1442→                    void send();
+  1443→                  }
+  1444→                  if (e.key === "Escape" && editing) {
+  1445→                    e.preventDefault();
+  1446→                    cancelEdit();
+  1447→                  }
+  1448→                }}
+  1449→                onPaste={onPaste}
+  1450→                placeholder={
+  1451→                  imageMode
+  1452→                    ? "Describe the image to create — or attach one to edit it…"
+  1453→                    : "Ask anything — attach files, paste images, or drop them here"
+  1454→                }
+  1455→                rows={2}
+  1456→                maxLength={8000}
+  1457→                aria-label="Message Memphis AI"
+  1458→                className="bg-transparent border-0 text-white placeholder:text-[#555] focus-visible:ring-0 min-h-0 resize-none pt-3"
+  1459→              />
+  1460→
+  1461→              {/* composer toolbar */}
+  1462→              <div className="flex items-center gap-1.5 px-2.5 pb-2.5 pt-1">
+  1463→                <input
+  1464→                  ref={fileInputRef}
+  1465→                  type="file"
+  1466→                  multiple
+  1467→                  className="hidden"
+  1468→                  onChange={(e) => {
+  1469→                    if (e.target.files?.length) void uploadFiles(e.target.files);
+  1470→                    e.target.value = "";
+  1471→                  }}
+  1472→                />
+  1473→                <button
+  1474→                  onClick={() => fileInputRef.current?.click()}
+  1475→                  disabled={attached.length + uploading.length >= MAX_ATTACH}
+  1476→                  aria-label="Attach files"
+  1477→                  title="Attach files — any type"
+  1478→                  className="p-2 rounded-lg text-[#999] hover:text-white hover:bg-[#161616] disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+  1479→                >
+  1480→                  <Paperclip className="size-4" />
+  1481→                </button>
+  1482→
+  1483→                {/* Fast / Reasoning mode */}
+  1484→                <div
+  1485→                  role="group"
+  1486→                  aria-label="Reply mode"
+  1487→                  className="inline-flex items-center rounded-lg border border-[#262626] overflow-hidden"
+  1488→                >
+  1489→                  <button
+  1490→                    onClick={() => setModePersisted("fast")}
+  1491→                    aria-pressed={mode === "fast"}
+  1492→                    title="Fast — quick, direct answers"
+  1493→                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[12px] transition-colors ${
+  1494→                      mode === "fast"
+  1495→                        ? "bg-white text-black"
+  1496→                        : "text-[#999] hover:text-white hover:bg-[#161616]"
+  1497→                    }`}
+  1498→                  >
+  1499→                    <Zap className="size-3.5" /> Fast
+  1500→                  </button>
+  1501→                  <button
+  1502→                    onClick={() => setModePersisted("reasoning")}
+  1503→                    aria-pressed={mode === "reasoning"}
+  1504→                    title="Reasoning — thinks step by step before answering"
+  1505→                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[12px] border-l border-[#262626] transition-colors ${
+  1506→                      mode === "reasoning"
+  1507→                        ? "bg-white text-black"
+  1508→                        : "text-[#999] hover:text-white hover:bg-[#161616]"
+  1509→                    }`}
+  1510→                  >
+  1511→                    <Brain className="size-3.5" /> Reasoning
+  1512→                  </button>
+  1513→                </div>
+  1514→
+  1515→                <button
+  1516→                  onClick={() => {
+  1517→                    setWebSearch((v) => !v);
+  1518→                    if (imageMode) setImageMode(false);
+  1519→                  }}
+  1520→                  aria-pressed={webSearch}
+  1521→                  title="Search the web and cite sources"
+  1522→                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] border transition-colors ${
+  1523→                    webSearch
+  1524→                      ? "bg-white text-black border-white"
+  1525→                      : "border-[#262626] text-[#999] hover:text-white hover:bg-[#161616]"
+  1526→                  }`}
+  1527→                >
+  1528→                  <Globe className="size-3.5" /> Web
+  1529→                </button>
+  1530→
+  1531→                <button
+  1532→                  onClick={() => {
+  1533→                    setImageMode((v) => !v);
+  1534→                    if (webSearch) setWebSearch(false);
+  1535→                  }}
+  1536→                  aria-pressed={imageMode}
+  1537→                  title="Create or edit images"
+  1538→                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] border transition-colors ${
+  1539→                    imageMode
+  1540→                      ? "bg-white text-black border-white"
+  1541→                      : "border-[#262626] text-[#999] hover:text-white hover:bg-[#161616]"
+  1542→                  }`}
+  1543→                >
+  1544→                  <Palette className="size-3.5" /> Image
+  1545→                </button>
+  1546→
+  1547→                <div className="ml-auto flex items-center gap-1.5">
+  1548→                  {recording && (
+  1549→                    <span className="inline-flex items-center gap-1.5 text-[12px] text-red-400 font-mono">
+  1550→                      <span className="size-2 rounded-full bg-red-500 animate-pulse" />
+  1551→                      {String(Math.floor(recordSecs / 60)).padStart(2, "0")}:
+  1552→                      {String(recordSecs % 60).padStart(2, "0")}
+  1553→                    </span>
+  1554→                  )}
+  1555→                  {transcribing && (
+  1556→                    <span className="inline-flex items-center gap-1 text-[11px] text-[#888]">
+  1557→                      <Loader2 className="size-3 animate-spin" /> transcribing…
+  1558→                    </span>
+  1559→                  )}
+  1560→                  <button
+  1561→                    onClick={() => (recording ? void stopRecording() : void startRecording())}
+  1562→                    aria-label={recording ? "Stop recording" : "Record voice message"}
+  1563→                    title={recording ? "Stop & transcribe" : "Voice input"}
+  1564→                    className={`p-2 rounded-lg transition-colors ${
+  1565→                      recording
+  1566→                        ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
+  1567→                        : "text-[#999] hover:text-white hover:bg-[#161616]"
+  1568→                    }`}
+  1569→                  >
+  1570→                    {recording ? <Square className="size-4" /> : <Mic className="size-4" />}
+  1571→                  </button>
+  1572→                  <Button
+  1573→                    onClick={() => (sending ? stop() : void send())}
+  1574→                    disabled={(!sending && (!input.trim() && !attached.length)) || uploading.length > 0}
+  1575→                    className="bg-white text-black hover:bg-[#e0e0e0] size-9 p-0 rounded-lg"
+  1576→                    aria-label={sending ? "Stop generating" : "Send message"}
+  1577→                    title={sending ? "Stop — keep what arrived" : "Send"}
+  1578→                  >
+  1579→                    {sending ? (
+  1580→                      <Square className="size-4 fill-current" />
+  1581→                    ) : (
+  1582→                      <Send className="size-4" />
+  1583→                    )}
+  1584→                  </Button>
+  1585→                </div>
+  1586→              </div>
+  1587→            </div>
+  1588→
+  1589→            <div className="flex items-center justify-between mt-1.5 px-1">
+  1590→              <span className="text-[11px] text-[#555]">
+  1591→                {uploading.length > 0
+  1592→                  ? "Uploading & reading your files…"
+  1593→                  : sending
+  1594→                    ? busyLabel === "thinking"
+  1595→                      ? "GLM is thinking…"
+  1596→                      : busyLabel
+  1597→                        ? `${busyLabel}`
+  1598→                        : "GLM is writing…"
+  1599→                    : "Enter to send · Shift+Enter for newline"}
+  1600→              </span>
+  1601→              {attached.length > 0 && (
+  1602→                <span className="text-[11px] text-[#666]">
+  1603→                  {attached.length}/{MAX_ATTACH} files
+  1604→                </span>
+  1605→              )}
+  1606→            </div>
+  1607→
+  1608→            {/* custom instructions editor */}
+  1609→            <details className="mt-2 group">
+  1610→              <summary className="text-[12px] text-[#777] hover:text-white cursor-pointer select-none flex items-center gap-1.5">
+  1611→                <MessagesSquare className="size-3.5" /> Custom instructions
+  1612→              </summary>
+  1613→              <div className="mt-2 flex gap-2">
+  1614→                <Textarea
+  1615→                  value={instructionsDraft}
+  1616→                  onChange={(e) => setInstructionsDraft(e.target.value)}
+  1617→                  placeholder="e.g. Answer in Spanish. I'm a beginner coder — explain like I'm new."
+  1618→                  rows={2}
+  1619→                  maxLength={1000}
+  1620→                  className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] text-[12px] focus-visible:ring-white/30 min-h-0"
+  1621→                />
+  1622→                <Button
+  1623→                  size="sm"
+  1624→                  variant="outline"
+  1625→                  onClick={() => void saveInstructions()}
+  1626→                  disabled={savingInstructions}
+  1627→                  className="border-[#2a2a2a] text-white hover:bg-[#101010] self-start"
+  1628→                >
+  1629→                  <Save className="size-3.5" /> {savingInstructions ? "…" : "Save"}
+  1630→                </Button>
+  1631→              </div>
+  1632→            </details>
+  1633→          </div>
+  1634→        </div>
+  1635→      </div>
+  1636→
+  1637→      {/* flashcards modal */}
+  1638→      <Dialog open={showCards} onOpenChange={setShowCards}>
+  1639→        <DialogContent className="bg-[#050505] border-[#1f1f1f] text-white max-w-md">
+  1640→          <DialogHeader>
+  1641→            <DialogTitle className="flex items-center gap-2 text-base">
+  1642→              <Layers className="size-4" /> Flashcards
+  1643→            </DialogTitle>
+  1644→            <DialogDescription className="text-xs text-[#7a7a7a]">
+  1645→              Click the card to flip. {cards.length} card{cards.length === 1 ? "" : "s"} saved
+  1646→              on this device.
+  1647→            </DialogDescription>
+  1648→          </DialogHeader>
+  1649→          {card ? (
+  1650→            <>
+  1651→              <button
+  1652→                onClick={() => setCardFlipped((f) => !f)}
+  1653→                className="w-full min-h-44 rounded-lg border border-[#222] bg-[#0a0a0a] p-6 text-center hover:border-[#444] transition-colors"
+  1654→                aria-label={cardFlipped ? "Show question" : "Show answer"}
+  1655→              >
+  1656→                <p className="text-[11px] font-mono uppercase tracking-wider text-[#555] mb-2">
+  1657→                  {cardFlipped ? "answer" : "question"}
+  1658→                </p>
+  1659→                <p className="text-[15px] text-white leading-relaxed">
+  1660→                  {cardFlipped ? card.back : card.front}
+  1661→                </p>
+  1662→              </button>
+  1663→              <div className="flex items-center justify-between">
+  1664→                <Button
+  1665→                  variant="ghost"
+  1666→                  size="sm"
+  1667→                  onClick={() => {
+  1668→                    setCardIdx((i) => (i - 1 + cards.length) % cards.length);
+  1669→                    setCardFlipped(false);
+  1670→                  }}
+  1671→                  className="text-[#9a9a9a] hover:text-white"
+  1672→                >
+  1673→                  <ChevronLeft className="size-4" />
+  1674→                </Button>
+  1675→                <span className="text-[12px] text-[#777] font-mono">
+  1676→                  {cardIdx + 1} / {cards.length}
+  1677→                </span>
+  1678→                <div className="flex gap-1">
+  1679→                  <Button
+  1680→                    variant="ghost"
+  1681→                    size="sm"
+  1682→                    aria-label="Restart deck"
+  1683→                    onClick={() => {
+  1684→                      setCardIdx(0);
+  1685→                      setCardFlipped(false);
+  1686→                    }}
+  1687→                    className="text-[#9a9a9a] hover:text-white"
+  1688→                  >
+  1689→                    <RotateCcw className="size-4" />
+  1690→                  </Button>
+  1691→                  <Button
+  1692→                    variant="ghost"
+  1693→                    size="sm"
+  1694→                    aria-label="Delete this card"
+  1695→                    onClick={() => {
+  1696→                      const next = cards.filter((_, i) => i !== cardIdx);
+  1697→                      setCards(next);
+  1698→                      lsSet(FLASHCARD_KEY, next);
+  1699→                      setCardIdx((i) => Math.min(i, Math.max(0, next.length - 1)));
+  1700→                      if (!next.length) setShowCards(false);
+  1701→                    }}
+  1702→                    className="text-[#9a9a9a] hover:text-white"
+  1703→                  >
+  1704→                    <Trash2 className="size-4" />
+  1705→                  </Button>
+  1706→                  <Button
+  1707→                    variant="ghost"
+  1708→                    size="sm"
+  1709→                    onClick={() => {
+  1710→                      setCardIdx((i) => (i + 1) % cards.length);
+  1711→                      setCardFlipped(false);
+  1712→                    }}
+  1713→                    className="text-[#9a9a9a] hover:text-white"
+  1714→                  >
+  1715→                    <ChevronRight className="size-4" />
+  1716→                  </Button>
+  1717→                </div>
+  1718→              </div>
+  1719→            </>
+  1720→          ) : (
+  1721→            <p className="text-[13px] text-[#777] text-center py-6">
+  1722→              No cards — generate some from a chat.
+  1723→            </p>
+  1724→          )}
+  1725→        </DialogContent>
+  1726→      </Dialog>
+  1727→    </div>
+  1728→  );
+  1729→}
+  1730→

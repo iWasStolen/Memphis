@@ -40,8 +40,10 @@ Browser
        ├─ /api/games    — 3,500+-game catalog (search / categories / ids)
        ├─ /api/ai/*     — GLM chat (streaming SSE, no auth, no limits):
        │    Fast/Reasoning modes, any-file attachments, vision, web search
-       │    with citations, image gen/edit, voice in/out, regenerate/edit/
-       │    rename, follow-up suggestions — all session-scoped
+       │    with citations, image gen/edit, voice in/out, FILE COMPOSITION
+       │    (real .xlsx/.docx/.pptx/.pdf/code/data files, live composing
+       │    view, preview + download cards), regenerate/edit/rename,
+       │    follow-up suggestions — all session-scoped
        ├─ /api/games/scores, /api/auth/*, /api/reports
        └─ chat-service  — socket.io community chat (port 3003)
 ```

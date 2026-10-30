@@ -1,0 +1,718 @@
+     1→     1→import { db } from "@/lib/db";
+     2→     2→import { readFile, writeFile, mkdir } from "node:fs/promises";
+     3→     3→import path from "node:path";
+     4→     4→import { UPLOAD_DIR, fileContextBlock, safeName } from "@/lib/ai-files";
+     5→     5→
+     6→     6→export const runtime = "nodejs";
+     7→     7→export const dynamic = "force-dynamic";
+     8→     8→
+     9→     9→/* ------------------------------------------------------------
+    10→    10→   /api/ai/chat — Memphis AI, powered by GLM via z-ai-web-dev-sdk
+    11→    11→   - No sign-in, no token quota, no rate limits.
+    12→    12→   - Anonymous browser session owns its conversations.
+    13→    13→   - Supports:
+    14→    14→       · file attachments (any type — extraction happens at upload)
+    15→    15→       · live vision on attached images (createVision)
+    16→    16→       · web search with citations (planner → web_search → page_reader)
+    17→    17→       · image generation / editing (images.generations)
+    18→    18→       · Fast / Reasoning modes (thinking enabled streams a private
+    19→    19→         chain-of-thought as `reasoning` events before the answer)
+    20→    20→       · regenerate (replay the last user turn) and edit (rewrite a
+    21→    21→         user turn, truncate everything after it, replay)
+    22→    22→   - Streams the reply over SSE with status events, then persists.
+    23→    23→     Client aborts (Stop button) don't lose the reply: enqueues are
+    24→    24→     swallowed after cancel and the answer is still saved.
+    25→    25→   ------------------------------------------------------------ */
+    26→    26→
+    27→    27→const SYSTEM_BASE = `You are Memphis AI — a sharp, friendly, general-purpose assistant built into the Memphis unBLACKed web app.
+    28→    28→You are powered by GLM, and you are completely free with no limits.
+    29→    29→Guidelines:
+    30→    30→- Answer anything: homework, code, creative writing, explanations, planning, chat.
+    31→    31→- Use clean markdown: short sections, bullet lists, tables and fenced code blocks with language tags.
+    32→    32→- Be direct and useful first; add brief context after when it helps.
+    33→    33→- Match the user's language and tone.
+    34→    34→- The user can attach files of ANY type. Their contents arrive as [attached file: …] blocks — extracted text, spreadsheets, transcriptions, or visual descriptions. Treat those blocks as the source of truth for questions about the files. Quote specifics (numbers, names, lines) when answering. If the answer isn't in the file, say so plainly instead of guessing.`;
+    35→    35→
+    36→    36→const REASONING_HINT = `
+    37→    37→
+    38→    38→REASONING MODE is ON for this reply: your private reasoning notes are appended to the user's message between [your private reasoning notes] and [end notes] markers. Use them to produce a rigorous, well-structured final answer that shows the key steps and justification — but never mention, quote or repeat the notes themselves.`;
+    39→    39→
+    40→    40→const THINKING_SYSTEM = `You are the private thinking phase of Memphis AI. Think through the user's request and write concise working notes for yourself: restate the goal, pull out key facts and constraints, consider approaches, check traps and edge cases, then settle on a plan. First person, telegraphic style, no markdown headings, no greeting, no final polished answer — a separate final answer is written afterwards from your notes. Keep it under 200 words.`;
+    41→    41→
+    42→    42→const MAX_MESSAGE = 8000;
+    43→    43→const HISTORY_TURNS = 30; /* messages of context (bounded, not limited per day) */
+    44→    44→const MAX_ATTACHMENTS = 6;
+    45→    45→const CURRENT_FILE_BUDGET = 20_000; /* chars per file, current turn */
+    46→    46→const CURRENT_TOTAL_BUDGET = 60_000;
+    47→    47→const HISTORY_FILE_BUDGET = 1_200; /* chars per file inside older turns */
+    48→    48→const HISTORY_TOTAL_BUDGET = 8_000;
+    49→    49→const MAX_REASONING_STORED = 24_000; /* chars of chain-of-thought kept per reply */
+    50→    50→
+    51→    51→interface AttMeta {
+    52→    52→  id: string;
+    53→    53→  name: string;
+    54→    54→  kind: string;
+    55→    55→  size: number;
+    56→    56→  mime: string;
+    57→    57→}
+    58→    58→
+    59→    59→function validSessionId(s: unknown): s is string {
+    60→    60→  return typeof s === "string" && /^[a-zA-Z0-9_-]{8,64}$/.test(s);
+    61→    61→}
+    62→    62→
+    63→    63→function attMetas(files: { id: string; name: string; kind: string; size: number; mime: string }[]): AttMeta[] {
+    64→    64→  return files.map((f) => ({ id: f.id, name: f.name, kind: f.kind, size: f.size, mime: f.mime }));
+    65→    65→}
+    66→    66→
+    67→    67→function stripHtml(html: string): string {
+    68→    68→  return html
+    69→    69→    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    70→    70→    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    71→    71→    .replace(/<[^>]+>/g, " ")
+    72→    72→    .replace(/&nbsp;/g, " ")
+    73→    73→    .replace(/&amp;/g, "&")
+    74→    74→    .replace(/&lt;/g, "<")
+    75→    75→    .replace(/&gt;/g, ">")
+    76→    76→    .replace(/&quot;/g, '"')
+    77→    77→    .replace(/&#39;/g, "'")
+    78→    78→    .replace(/[ \t]+/g, " ")
+    79→    79→    .replace(/\n\s*\n\s*\n+/g, "\n\n")
+    80→    80→    .trim();
+    81→    81→}
+    82→    82→
+    83→    83→/* Pump a z-ai completion (raw SSE bytes, strings, or parsed chunk
+    84→    84→   objects), collecting and forwarding reasoning_content + content.
+    85→    85→   Returns everything the call produced. */
+    86→    86→async function pumpStream(
+    87→    87→  completion: unknown,
+    88→    88→  onReasoning: (t: string) => void,
+    89→    89→  onDelta: (t: string) => void
+    90→    90→): Promise<{ content: string; reasoning: string }> {
+    91→    91→  const decoder = new TextDecoder();
+    92→    92→  let rawBuf = "";
+    93→    93→  let content = "";
+    94→    94→  let reasoning = "";
+    95→    95→
+    96→    96→  const handleObj = (obj: {
+    97→    97→    choices?: {
+    98→    98→      delta?: { content?: string; reasoning_content?: string };
+    99→    99→      message?: { content?: string; reasoning_content?: string };
+   100→   100→    }[];
+   101→   101→  }) => {
+   102→   102→    const thinkDelta =
+   103→   103→      obj?.choices?.[0]?.delta?.reasoning_content ??
+   104→   104→      obj?.choices?.[0]?.message?.reasoning_content ??
+   105→   105→      "";
+   106→   106→    if (thinkDelta) {
+   107→   107→      reasoning += thinkDelta;
+   108→   108→      onReasoning(thinkDelta);
+   109→   109→    }
+   110→   110→    const delta =
+   111→   111→      obj?.choices?.[0]?.delta?.content ??
+   112→   112→      obj?.choices?.[0]?.message?.content ??
+   113→   113→      "";
+   114→   114→    if (delta) {
+   115→   115→      content += delta;
+   116→   116→      onDelta(delta);
+   117→   117→    }
+   118→   118→  };
+   119→   119→
+   120→   120→  const consumeLine = (line: string) => {
+   121→   121→    const t = line.trim();
+   122→   122→    if (!t.startsWith("data:")) return;
+   123→   123→    const payload = t.slice(5).trim();
+   124→   124→    if (!payload || payload === "[DONE]") return;
+   125→   125→    try {
+   126→   126→      handleObj(JSON.parse(payload));
+   127→   127→    } catch {
+   128→   128→      /* partial json — ignore */
+   129→   129→    }
+   130→   130→  };
+   131→   131→
+   132→   132→  const consumeBuf = () => {
+   133→   133→    const lines = rawBuf.split("\n");
+   134→   134→    rawBuf = lines.pop() ?? "";
+   135→   135→    for (const line of lines) consumeLine(line);
+   136→   136→  };
+   137→   137→
+   138→   138→  const iterable = completion as AsyncIterable<unknown> | null;
+   139→   139→  if (iterable && typeof iterable[Symbol.asyncIterator] === "function") {
+   140→   140→    for await (const chunk of iterable) {
+   141→   141→      if (chunk instanceof Uint8Array) {
+   142→   142→        rawBuf += decoder.decode(chunk, { stream: true });
+   143→   143→        consumeBuf();
+   144→   144→      } else if (typeof chunk === "string") {
+   145→   145→        rawBuf += chunk;
+   146→   146→        consumeBuf();
+   147→   147→      } else if (chunk && typeof chunk === "object") {
+   148→   148→        handleObj(chunk as Parameters<typeof handleObj>[0]);
+   149→   149→      }
+   150→   150→    }
+   151→   151→    rawBuf += decoder.decode();
+   152→   152→    consumeBuf();
+   153→   153→  } else {
+   154→   154→    handleObj(
+   155→   155→      (completion as { choices?: { message?: { content?: string; reasoning_content?: string } }[] }) ?? {}
+   156→   156→    );
+   157→   157→  }
+   158→   158→  return { content, reasoning };
+   159→   159→}
+   160→   160→
+   161→   161→export async function POST(req: Request) {
+   162→   162→  let body: {
+   163→   163→    sessionId?: string;
+   164→   164→    conversationId?: string | null;
+   165→   165→    message?: string;
+   166→   166→    instructions?: string;
+   167→   167→    attachments?: unknown;
+   168→   168→    webSearch?: boolean;
+   169→   169→    imageMode?: boolean;
+   170→   170→    mode?: string;
+   171→   171→    regenerate?: boolean;
+   172→   172→    edit?: { messageId?: string; text?: string } | null;
+   173→   173→  };
+   174→   174→  try {
+   175→   175→    body = await req.json();
+   176→   176→  } catch {
+   177→   177→    return Response.json({ error: "Invalid request" }, { status: 400 });
+   178→   178→  }
+   179→   179→
+   180→   180→  const mode = body.mode === "reasoning" ? "reasoning" : "fast";
+   181→   181→  const regenerate = body.regenerate === true;
+   182→   182→  const edit =
+   183→   183→    body.edit && typeof body.edit === "object" && typeof body.edit.messageId === "string"
+   184→   184→      ? body.edit
+   185→   185→      : null;
+   186→   186→  const replay = regenerate || !!edit; /* both reuse a stored user turn */
+   187→   187→
+   188→   188→  const message = (body.message ?? "").trim().slice(0, MAX_MESSAGE);
+   189→   189→  const attachmentIds = Array.isArray(body.attachments)
+   190→   190→    ? body.attachments.filter((x): x is string => typeof x === "string").slice(0, MAX_ATTACHMENTS)
+   191→   191→    : [];
+   192→   192→  if (!message && !attachmentIds.length && !replay)
+   193→   193→    return Response.json({ error: "Empty message" }, { status: 400 });
+   194→   194→  if (!validSessionId(body.sessionId))
+   195→   195→    return Response.json({ error: "Invalid session" }, { status: 400 });
+   196→   196→  if (replay && !body.conversationId)
+   197→   197→    return Response.json({ error: "No conversation to replay" }, { status: 400 });
+   198→   198→
+   199→   199→  const sessionId = body.sessionId;
+   200→   200→  const instructions = (body.instructions ?? "").slice(0, 1000);
+   201→   201→  const webSearch = body.webSearch === true;
+   202→   202→  const imageMode = body.imageMode === true;
+   203→   203→
+   204→   204→  /* find the conversation (replay paths require an existing one) */
+   205→   205→  let conversation = body.conversationId
+   206→   206→    ? await db.aIConversation.findFirst({
+   207→   207→        where: { id: body.conversationId, sessionId },
+   208→   208→      })
+   209→   209→    : null;
+   210→   210→  if (!conversation && replay)
+   211→   211→    return Response.json({ error: "Conversation not found" }, { status: 400 });
+   212→   212→
+   213→   213→  /* ------------------------------------------------------------
+   214→   214→     Resolve the user turn this request answers:
+   215→   215→       · normal     → the message + attachments from the body
+   216→   216→       · regenerate → the newest stored user message (replayed)
+   217→   217→       · edit       → that message rewritten, everything after it dropped
+   218→   218→     ------------------------------------------------------------ */
+   219→   219→  let turnText = message;
+   220→   220→  let turnAttIds = attachmentIds;
+   221→   221→  let turnCreatedAt: Date | null = null; /* history is strictly older than this */
+   222→   222→  let editMsgId: string | null = null;
+   223→   223→  let editReplacesAtts = false; /* edit: rewrite the message's attachment chip list */
+   224→   224→
+   225→   225→  if (edit) {
+   226→   226→    const msg = await db.aIMessage.findFirst({
+   227→   227→      where: { id: edit.messageId, conversationId: conversation!.id, role: "user" },
+   228→   228→    });
+   229→   229→    if (!msg) return Response.json({ error: "Message not found" }, { status: 400 });
+   230→   230→    turnText = String(edit.text ?? "").trim().slice(0, MAX_MESSAGE);
+   231→   231→    turnAttIds = attachmentIds;
+   232→   232→    /* when the client sends an attachments array it replaces the old chip set */
+   233→   233→    editReplacesAtts = Array.isArray(body.attachments);
+   234→   234→    if (!turnText && !(editReplacesAtts ? turnAttIds.length : (msg.attachments as AttMeta[] | null)?.length))
+   235→   235→      return Response.json({ error: "Empty message" }, { status: 400 });
+   236→   236→    await db.aIMessage.update({
+   237→   237→      where: { id: msg.id },
+   238→   238→      data: {
+   239→   239→        content: turnText || "(files attached — please review them)",
+   240→   240→      },
+   241→   241→    });
+   242→   242→    /* drop every message after the edited one (assistant replies etc.) */
+   243→   243→    await db.aIMessage.deleteMany({
+   244→   244→      where: { conversationId: conversation!.id, createdAt: { gt: msg.createdAt } },
+   245→   245→    });
+   246→   246→    editMsgId = msg.id;
+   247→   247→    turnCreatedAt = msg.createdAt;
+   248→   248→  } else if (regenerate) {
+   249→   249→    const lastUser = await db.aIMessage.findFirst({
+   250→   250→      where: { conversationId: conversation!.id, role: "user" },
+   251→   251→      orderBy: { createdAt: "desc" },
+   252→   252→    });
+   253→   253→    if (!lastUser) return Response.json({ error: "Nothing to regenerate" }, { status: 400 });
+   254→   254→    turnText = lastUser.content;
+   255→   255→    const atts = Array.isArray(lastUser.attachments) ? (lastUser.attachments as unknown as AttMeta[]) : [];
+   256→   256→    turnAttIds = atts.map((a) => a?.id).filter((id): id is string => typeof id === "string");
+   257→   257→    /* drop the stale assistant reply(ies) after it */
+   258→   258→    await db.aIMessage.deleteMany({
+   259→   259→      where: { conversationId: conversation!.id, role: "assistant", createdAt: { gt: lastUser.createdAt } },
+   260→   260→    });
+   261→   261→    turnCreatedAt = lastUser.createdAt;
+   262→   262→  }
+   263→   263→
+   264→   264→  /* load the turn's attachment records (ownership-enforced) */
+   265→   265→  const currentFiles = turnAttIds.length
+   266→   266→    ? await db.aIFile.findMany({ where: { id: { in: turnAttIds }, sessionId } })
+   267→   267→    : [];
+   268→   268→  const filesById = new Map(currentFiles.map((f) => [f.id, f]));
+   269→   269→  const orderedFiles = turnAttIds.map((id) => filesById.get(id)).filter(Boolean) as typeof currentFiles;
+   270→   270→
+   271→   271→  /* edit: now that the surviving files are known, rewrite the chip list */
+   272→   272→  if (editMsgId) {
+   273→   273→    await db.aIMessage.update({
+   274→   274→      where: { id: editMsgId },
+   275→   275→      data: {
+   276→   276→        ...(editReplacesAtts
+   277→   277→          ? { attachments: orderedFiles.length ? JSON.parse(JSON.stringify(attMetas(orderedFiles))) : null }
+   278→   278→          : {}),
+   279→   279→      },
+   280→   280→    });
+   281→   281→  }
+   282→   282→
+   283→   283→  const firstFileName = orderedFiles[0]?.name;
+   284→   284→  const titleSource =
+   285→   285→    turnText || (firstFileName ? `Files: ${firstFileName}${orderedFiles.length > 1 ? ` +${orderedFiles.length - 1}` : ""}` : "New chat");
+   286→   286→
+   287→   287→  /* create the conversation for fresh chats (replay paths already have one) */
+   288→   288→  if (!conversation) {
+   289→   289→    conversation = await db.aIConversation.create({
+   290→   290→      data: {
+   291→   291→        sessionId,
+   292→   292→        title: titleSource.slice(0, 60),
+   293→   293→        instructions,
+   294→   294→      },
+   295→   295→    });
+   296→   296→  } else if (body.instructions !== undefined && conversation.instructions !== instructions) {
+   297→   297→    await db.aIConversation.update({
+   298→   298→      where: { id: conversation.id },
+   299→   299→      data: { instructions },
+   300→   300→    });
+   301→   301→  }
+   302→   302→
+   303→   303→  const conversationId = conversation.id;
+   304→   304→
+   305→   305→  /* recent history for context — take the NEWEST N messages strictly
+   306→   306→     before this turn (desc + take), then restore chronological order */
+   307→   307→  const history = (
+   308→   308→    await db.aIMessage.findMany({
+   309→   309→      where: {
+   310→   310→        conversationId,
+   311→   311→        ...(turnCreatedAt ? { createdAt: { lt: turnCreatedAt } } : {}),
+   312→   312→      },
+   313→   313→      orderBy: { createdAt: "desc" },
+   314→   314→      take: HISTORY_TURNS,
+   315→   315→    })
+   316→   316→  ).reverse();
+   317→   317→
+   318→   318→  /* pull file knowledge referenced by older turns so the model
+   319→   319→     keeps access to files across the conversation */
+   320→   320→  const historyAttIds = new Set<string>();
+   321→   321→  for (const m of history) {
+   322→   322→    const atts = m.attachments as AttMeta[] | null;
+   323→   323→    if (Array.isArray(atts)) for (const a of atts) if (a?.id) historyAttIds.add(a.id);
+   324→   324→  }
+   325→   325→  historyAttIds.delete(""); /* never loaded */
+   326→   326→  const historyFiles = historyAttIds.size
+   327→   327→    ? await db.aIFile.findMany({ where: { id: { in: [...historyAttIds] }, sessionId } })
+   328→   328→    : [];
+   329→   329→  const historyFilesById = new Map(historyFiles.map((f) => [f.id, f]));
+   330→   330→  let historyBudget = HISTORY_TOTAL_BUDGET;
+   331→   331→
+   332→   332→  const historyMessages = history.map((m) => {
+   333→   333→    const atts = m.attachments as AttMeta[] | null;
+   334→   334→    let content = m.content;
+   335→   335→    if (Array.isArray(atts) && atts.length) {
+   336→   336→      const blocks: string[] = [];
+   337→   337→      for (const a of atts) {
+   338→   338→        const f = historyFilesById.get(a.id);
+   339→   339→        if (!f || historyBudget <= 0) continue;
+   340→   340→        const block = fileContextBlock(f, Math.min(HISTORY_FILE_BUDGET, historyBudget));
+   341→   341→        historyBudget -= block.length;
+   342→   342→        blocks.push(block);
+   343→   343→      }
+   344→   344→      if (blocks.length) content = `${blocks.join("\n\n")}\n\n${content}`;
+   345→   345→    }
+   346→   346→    return {
+   347→   347→      role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
+   348→   348→      content,
+   349→   349→    };
+   350→   350→  });
+   351→   351→
+   352→   352→  /* persist the user's message — only for fresh turns; replay paths
+   353→   353→     reuse the stored one */
+   354→   354→  let userMessageId: string | null = null;
+   355→   355→  if (!replay) {
+   356→   356→    const savedUser = await db.aIMessage.create({
+   357→   357→      data: {
+   358→   358→        conversationId,
+   359→   359→        role: "user",
+   360→   360→        content: message || "(files attached — please review them)",
+   361→   361→        attachments: orderedFiles.length ? JSON.parse(JSON.stringify(attMetas(orderedFiles))) : undefined,
+   362→   362→      },
+   363→   363→    });
+   364→   364→    userMessageId = savedUser.id;
+   365→   365→  }
+   366→   366→
+   367→   367→  /* tie the files to this conversation */
+   368→   368→  if (orderedFiles.length) {
+   369→   369→    await db.aIFile.updateMany({
+   370→   370→      where: { id: { in: orderedFiles.map((f) => f.id) } },
+   371→   371→      data: { conversationId },
+   372→   372→    });
+   373→   373→  }
+   374→   374→
+   375→   375→  const systemMsg =
+   376→   376→    (instructions.trim()
+   377→   377→      ? `${SYSTEM_BASE}\n\nThe user's custom instructions: ${instructions.trim()}`
+   378→   378→      : SYSTEM_BASE) + (mode === "reasoning" ? REASONING_HINT : "");
+   379→   379→
+   380→   380→  /* what the model sees for the current turn */
+   381→   381→  const fileBlocks: string[] = [];
+   382→   382→  let currentBudget = CURRENT_TOTAL_BUDGET;
+   383→   383→  for (const f of orderedFiles) {
+   384→   384→    if (currentBudget <= 0) break;
+   385→   385→    const block = fileContextBlock(f, Math.min(CURRENT_FILE_BUDGET, currentBudget));
+   386→   386→    currentBudget -= block.length;
+   387→   387→    fileBlocks.push(block);
+   388→   388→  }
+   389→   389→  const currentImages = orderedFiles.filter((f) => f.kind === "image" && f.mime !== "image/svg+xml");
+   390→   390→  const promptText = [fileBlocks.join("\n\n"), turnText].filter(Boolean).join("\n\n") || "(files attached — please review them)";
+   391→   391→
+   392→   392→  const encoder = new TextEncoder();
+   393→   393→  const stream = new ReadableStream<Uint8Array>({
+   394→   394→    async start(controller) {
+   395→   395→      /* enqueue() throws once the client aborts (Stop button) — swallow
+   396→   396→         those errors and keep generating so the reply is still persisted */
+   397→   397→      let closed = false;
+   398→   398→      const send = (event: string, data: unknown) => {
+   399→   399→        if (closed) return;
+   400→   400→        try {
+   401→   401→          controller.enqueue(
+   402→   402→            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+   403→   403→          );
+   404→   404→        } catch {
+   405→   405→          closed = true;
+   406→   406→        }
+   407→   407→      };
+   408→   408→      const finish = () => {
+   409→   409→        if (closed) return;
+   410→   410→        try {
+   411→   411→          controller.close();
+   412→   412→        } catch {
+   413→   413→          /* already closed */
+   414→   414→        }
+   415→   415→      };
+   416→   416→
+   417→   417→      send("meta", { conversationId, userMessageId });
+   418→   418→
+   419→   419→      let reply = "";
+   420→   420→      let think = "";
+   421→   421→      let assistantAtts: AttMeta[] | null = null;
+   422→   422→
+   423→   423→      try {
+   424→   424→        const { default: ZAI } = await import("z-ai-web-dev-sdk");
+   425→   425→        const zai = await ZAI.create();
+   426→   426→        const thinkingCfg = { type: mode === "reasoning" ? ("enabled" as const) : ("disabled" as const) };
+   427→   427→
+   428→   428→        /* ============ IMAGE MODE — generate / edit a picture ============ */
+   429→   429→        if (imageMode) {
+   430→   430→          send("status", { stage: "painting" });
+   431→   431→          const prompt = turnText || "a striking, beautiful image";
+   432→   432→          const editSource = currentImages[0];
+   433→   433→          let b64 = "";
+   434→   434→          let genNote = "";
+   435→   435→          try {
+   436→   436→            if (editSource) {
+   437→   437→              const buf = await readFile(editSource.path);
+   438→   438→              const dataMime = editSource.mime.startsWith("image/") ? editSource.mime : "image/png";
+   439→   439→              const res = await zai.images.generations.edit({
+   440→   440→                prompt,
+   441→   441→                image: `data:${dataMime};base64,${buf.toString("base64")}`,
+   442→   442→                size: "1024x1024",
+   443→   443→              });
+   444→   444→              b64 = res?.data?.[0]?.base64 ?? "";
+   445→   445→              genNote = "edited from your attached image";
+   446→   446→            } else {
+   447→   447→              const res = await zai.images.generations.create({ prompt, size: "1024x1024" });
+   448→   448→              b64 = res?.data?.[0]?.base64 ?? "";
+   449→   449→              genNote = "generated";
+   450→   450→            }
+   451→   451→          } catch (e) {
+   452→   452→            send("error", {
+   453→   453→              message: `Image generation failed (${e instanceof Error ? e.message : "unknown error"}). Try rephrasing.`,
+   454→   454→            });
+   455→   455→            finish();
+   456→   456→            return;
+   457→   457→          }
+   458→   458→          if (!b64) {
+   459→   459→            send("error", { message: "Image generation returned nothing — try again." });
+   460→   460→            finish();
+   461→   461→            return;
+   462→   462→          }
+   463→   463→
+   464→   464→          /* save the picture so it can be displayed + downloaded.
+   465→   465→             the API returns jpeg bytes more often than not — sniff the
+   466→   466→             real format so content-type never lies (nosniff is set) */
+   467→   467→          const isJpeg = /^\/9j\//.test(b64);
+   468→   468→          const isPng = /^iVBOR/.test(b64);
+   469→   469→          const isWebp = /^UklGR/.test(b64);
+   470→   470→          const mime = isPng ? "image/png" : isWebp ? "image/webp" : "image/jpeg";
+   471→   471→          const ext = isPng ? "png" : isWebp ? "webp" : "jpg";
+   472→   472→          const name = safeName(`memphis-image-${Date.now()}.${ext}`);
+   473→   473→          await mkdir(UPLOAD_DIR, { recursive: true });
+   474→   474→          const rec = await db.aIFile.create({
+   475→   475→            data: {
+   476→   476→              sessionId,
+   477→   477→              conversationId,
+   478→   478→              name,
+   479→   479→              mime,
+   480→   480→              size: 0,
+   481→   481→              kind: "generated",
+   482→   482→              path: "",
+   483→   483→              status: "processing",
+   484→   484→            },
+   485→   485→          });
+   486→   486→          const filePath = path.join(UPLOAD_DIR, `${rec.id}__${name}`);
+   487→   487→          const buf = Buffer.from(b64, "base64");
+   488→   488→          await writeFile(filePath, buf);
+   489→   489→          const savedFile = await db.aIFile.update({
+   490→   490→            where: { id: rec.id },
+   491→   491→            data: {
+   492→   492→              path: filePath,
+   493→   493→              size: buf.length,
+   494→   494→              extracted: `AI-${genNote} image from prompt: ${prompt}`,
+   495→   495→              status: "ready",
+   496→   496→            },
+   497→   497→          });
+   498→   498→          assistantAtts = attMetas([savedFile]);
+   499→   499→
+   500→   500→          reply =
+   501→   501→            `Here's your image (${genNote}):\n\n` +
+   502→   502→            `![${prompt.slice(0, 80)}](/api/ai/files/${rec.id}/raw?sessionId=${encodeURIComponent(sessionId)})\n\n` +
+   503→   503→            `Want a different take? Ask me to tweak it — attach this image (or keep it in the chat) and describe the change.`;
+   504→   504→          send("delta", { text: reply });
+   505→   505→        } else {
+   506→   506→          /* ============ WEB SEARCH — plan, search, read, cite ============ */
+   507→   507→          let searchContext = "";
+   508→   508→          if (webSearch) {
+   509→   509→            send("status", { stage: "searching" });
+   510→   510→            try {
+   511→   511→              const historyText = historyMessages
+   512→   512→                .slice(-6)
+   513→   513→                .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content.slice(0, 400)}`)
+   514→   514→                .join("\n");
+   515→   515→              const planCompletion = (await zai.chat.completions.create({
+   516→   516→                messages: [
+   517→   517→                  {
+   518→   518→                    role: "system",
+   519→   519→                    content:
+   520→   520→                      "You turn a user's question into web search queries. Reply with ONLY a JSON array of 1-3 short, specific search queries (strings), most relevant first. No prose, no markdown fences.",
+   521→   521→                  },
+   522→   522→                  {
+   523→   523→                    role: "user",
+   524→   524→                    content: `Recent conversation:\n${historyText}\n\nQuestion: ${turnText}`,
+   525→   525→                  },
+   526→   526→                ],
+   527→   527→                thinking: { type: "disabled" },
+   528→   528→              })) as { choices?: { message?: { content?: string } }[] };
+   529→   529→              const planText = planCompletion?.choices?.[0]?.message?.content ?? "";
+   530→   530→              const match = planText.match(/\[[\s\S]*\]/);
+   531→   531→              const queries = match
+   532→   532→                ? (JSON.parse(match[0]) as unknown[]).filter(
+   533→   533→                    (q): q is string => typeof q === "string" && q.trim().length > 1
+   534→   534→                  ).slice(0, 3)
+   535→   535→                : [];
+   536→   536→              if (!queries.length) queries.push(turnText.slice(0, 100));
+   537→   537→
+   538→   538→              const allResults: { url: string; name: string; snippet: string; host: string; date: string }[] = [];
+   539→   539→              const seen = new Set<string>();
+   540→   540→              await Promise.allSettled(
+   541→   541→                queries.map(async (q) => {
+   542→   542→                  const res = await zai.functions.invoke("web_search", { query: q, num: 5 });
+   543→   543→                  for (const r of res ?? []) {
+   544→   544→                    if (!r?.url || seen.has(r.url)) continue;
+   545→   545→                    seen.add(r.url);
+   546→   546→                    allResults.push({ url: r.url, name: r.name, snippet: r.snippet, host: r.host_name, date: r.date });
+   547→   547→                  }
+   548→   548→                })
+   549→   549→              );
+   550→   550→              const top = allResults.slice(0, 6);
+   551→   551→
+   552→   552→              if (top.length) {
+   553→   553→                /* read the two most promising pages for real content */
+   554→   554→                send("status", { stage: "reading", detail: top[0].host });
+   555→   555→                const pages: string[] = [];
+   556→   556→                for (const r of top.slice(0, 2)) {
+   557→   557→                  try {
+   558→   558→                    const page = await zai.functions.invoke("page_reader", { url: r.url });
+   559→   559→                    const text = stripHtml(page?.data?.html ?? "").slice(0, 3500);
+   560→   560→                    if (text.length > 200)
+   561→   561→                      pages.push(`--- page: ${page?.data?.title || r.name} (${r.host}) ---\n${text}`);
+   562→   562→                  } catch { /* skip unreadable pages */ }
+   563→   563→                }
+   564→   564→                const today = new Date().toISOString().slice(0, 10);
+   565→   565→                searchContext =
+   566→   566→                  `\n[web search results — retrieved ${today}]\n` +
+   567→   567→                  top
+   568→   568→                    .map(
+   569→   569→                      (r, i) =>
+   570→   570→                        `${i + 1}. "${r.name}" — ${r.host}${r.date ? ` (${r.date})` : ""}\n   ${r.snippet}\n   ${r.url}`
+   571→   571→                    )
+   572→   572→                    .join("\n") +
+   573→   573→                  (pages.length ? `\n\n[full page extracts]\n${pages.join("\n\n")}` : "") +
+   574→   574→                  `\n[/web search results]`;
+   575→   575→              }
+   576→   576→            } catch {
+   577→   577→              searchContext = "";
+   578→   578→            }
+   579→   579→          }
+   580→   580→
+   581→   581→          /* ============ PHASE 1 (Reasoning mode) — visible private thinking ============
+   582→   582→             The z-ai endpoint has no native reasoning_content channel, so
+   583→   583→             Reasoning mode runs a dedicated thinking call first: short
+   584→   584→             working notes streamed live into the UI's thinking box, then
+   585→   585→             fed to the final-answer call below. */
+   586→   586→          if (mode === "reasoning") {
+   587→   587→            send("status", { stage: "reasoning" });
+   588→   588→            try {
+   589→   589→              const thinkRes = await pumpStream(
+   590→   590→                await zai.chat.completions.create({
+   591→   591→                  messages: [
+   592→   592→                    { role: "system" as const, content: THINKING_SYSTEM },
+   593→   593→                    { role: "user" as const, content: promptText + searchContext },
+   594→   594→                  ],
+   595→   595→                  max_tokens: 500,
+   596→   596→                  thinking: { type: "disabled" },
+   597→   597→                  stream: true,
+   598→   598→                }),
+   599→   599→                (t) => send("reasoning", { text: t }),
+   600→   600→                (t) => send("reasoning", { text: t })
+   601→   601→              );
+   602→   602→              think = [thinkRes.reasoning, thinkRes.content].filter(Boolean).join("\n").trim();
+   603→   603→            } catch {
+   604→   604→              /* thinking phase failed — fall through and answer directly */
+   605→   605→            }
+   606→   606→          }
+   607→   607→
+   608→   608→          /* ============ PHASE 2 — the final answer ============ */
+   609→   609→          send("status", { stage: "writing" });
+   610→   610→
+   611→   611→          const sys = systemMsg +
+   612→   612→            (searchContext
+   613→   613→              ? `\n\nWEB SEARCH MODE: fresh search results are appended below. Ground your answer in them, cite sources inline as markdown links like [source](url), and end with a "Sources" list of the links you used. If the results don't fully answer the question, say what's missing.`
+   614→   614→              : "");
+   615→   615→
+   616→   616→          const finalUserContent =
+   617→   617→            mode === "reasoning" && think
+   618→   618→              ? `${promptText + searchContext}\n\n[your private reasoning notes]\n${think}\n[end notes — write the final answer now; do not repeat the notes]`
+   619→   619→              : promptText + searchContext;
+   620→   620→
+   621→   621→          const messages = [
+   622→   622→            { role: "system" as const, content: sys },
+   623→   623→            ...historyMessages,
+   624→   624→          ];
+   625→   625→
+   626→   626→          /* live vision when images are attached to THIS turn */
+   627→   627→          if (currentImages.length) {
+   628→   628→            const parts: unknown[] = [{ type: "text", text: finalUserContent }];
+   629→   629→            for (const img of currentImages) {
+   630→   630→              try {
+   631→   631→                const buf = await readFile(img.path);
+   632→   632→                parts.push({
+   633→   633→                  type: "image_url",
+   634→   634→                  image_url: { url: `data:${img.mime};base64,${buf.toString("base64")}` },
+   635→   635→                });
+   636→   636→              } catch { /* skip unreadable image */ }
+   637→   637→            }
+   638→   638→            messages.push({ role: "user" as const, content: parts as never });
+   639→   639→          } else {
+   640→   640→            messages.push({ role: "user" as const, content: finalUserContent });
+   641→   641→          }
+   642→   642→
+   643→   643→          const completion =
+   644→   644→            currentImages.length
+   645→   645→              ? await zai.chat.completions.createVision({
+   646→   646→                  messages: messages as never,
+   647→   647→                  stream: true,
+   648→   648→                  thinking: thinkingCfg,
+   649→   649→                } as never)
+   650→   650→              : await zai.chat.completions.create({
+   651→   651→                  messages,
+   652→   652→                  thinking: thinkingCfg,
+   653→   653→                  stream: true,
+   654→   654→                });
+   655→   655→
+   656→   656→          const res = await pumpStream(
+   657→   657→            completion,
+   658→   658→            (t) => send("reasoning", { text: t }),
+   659→   659→            (t) => send("delta", { text: t })
+   660→   660→          );
+   661→   661→          reply = res.content;
+   662→   662→          if (res.reasoning) think = think ? `${think}\n${res.reasoning}` : res.reasoning;
+   663→   663→        }
+   664→   664→
+   665→   665→        if (!reply.trim()) {
+   666→   666→          reply = "(empty response — please try again)";
+   667→   667→          send("delta", { text: reply });
+   668→   668→        }
+   669→   669→      } catch (err) {
+   670→   670→        send("error", {
+   671→   671→          message:
+   672→   672→            err instanceof Error
+   673→   673→              ? `The model is unavailable right now (${err.message}). Try again.`
+   674→   674→              : "The model is unavailable right now. Try again.",
+   675→   675→        });
+   676→   676→        finish();
+   677→   677→        return;
+   678→   678→      }
+   679→   679→
+   680→   680→      /* persist the assistant reply (also when the client stopped
+   681→   681→         mid-stream — whatever arrived is kept) */
+   682→   682→      const saved = await db.aIMessage.create({
+   683→   683→        data: {
+   684→   684→          conversationId,
+   685→   685→          role: "assistant",
+   686→   686→          content: reply,
+   687→   687→          mode,
+   688→   688→          ...(think ? { reasoning: think.slice(0, MAX_REASONING_STORED) } : {}),
+   689→   689→          ...(assistantAtts ? { attachments: JSON.parse(JSON.stringify(assistantAtts)) } : {}),
+   690→   690→        },
+   691→   691→      });
+   692→   692→      await db.aIConversation.update({
+   693→   693→        where: { id: conversationId },
+   694→   694→        data: { updatedAt: new Date() },
+   695→   695→      });
+   696→   696→
+   697→   697→      send("done", {
+   698→   698→        messageId: saved.id,
+   699→   699→        conversationId,
+   700→   700→        title: conversation.title,
+   701→   701→        mode,
+   702→   702→        ...(think ? { reasoning: think.slice(0, MAX_REASONING_STORED) } : {}),
+   703→   703→        ...(assistantAtts ? { attachments: assistantAtts } : {}),
+   704→   704→      });
+   705→   705→      finish();
+   706→   706→    },
+   707→   707→  });
+   708→   708→
+   709→   709→  return new Response(stream, {
+   710→   710→    headers: {
+   711→   711→      "content-type": "text/event-stream; charset=utf-8",
+   712→   712→      "cache-control": "no-cache, no-transform",
+   713→   713→      connection: "keep-alive",
+   714→   714→      "x-accel-buffering": "no",
+   715→   715→    },
+   716→   716→  });
+   717→   717→}
+   718→   718→

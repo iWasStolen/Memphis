@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { UPLOAD_DIR, fileContextBlock, safeName } from "@/lib/ai-files";
+import { buildFile, ComposeParser, MAX_COMPOSE_FILES, retargetExt } from "@/lib/ai-compose";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +20,11 @@ export const dynamic = "force-dynamic";
          chain-of-thought as `reasoning` events before the answer)
        · regenerate (replay the last user turn) and edit (rewrite a
          user turn, truncate everything after it, replay)
+       · File mode — composes real, downloadable files (xlsx / docx /
+         pptx / pdf / code / data / anything text-shaped) from a
+         <<<FILE:name>>> … <<<END>>> protocol the model emits; the
+         server converts each block into a real file, saves it as an
+         AIFile and attaches it to the reply
    - Streams the reply over SSE with status events, then persists.
      Client aborts (Stop button) don't lose the reply: enqueues are
      swallowed after cancel and the answer is still saved.
@@ -38,6 +44,28 @@ const REASONING_HINT = `
 REASONING MODE is ON for this reply: your private reasoning notes are appended to the user's message between [your private reasoning notes] and [end notes] markers. Use them to produce a rigorous, well-structured final answer that shows the key steps and justification — but never mention, quote or repeat the notes themselves.`;
 
 const THINKING_SYSTEM = `You are the private thinking phase of Memphis AI. Think through the user's request and write concise working notes for yourself: restate the goal, pull out key facts and constraints, consider approaches, check traps and edge cases, then settle on a plan. First person, telegraphic style, no markdown headings, no greeting, no final polished answer — a separate final answer is written afterwards from your notes. Keep it under 200 words.`;
+
+const COMPOSE_SYSTEM = `You are Memphis AI in FILE COMPOSER mode — the user wants you to CREATE a real, downloadable file.
+
+Output protocol (follow it EXACTLY):
+1. Begin your reply with a line: <<<FILE: filename.ext>>> — pick a short, descriptive, kebab-case filename with the extension that best matches the request.
+2. Then the file body — the COMPLETE, final content:
+   - .xlsx / .xls -> comma-separated CSV. First row = column headers. Quote cells that contain commas. For multiple sheets, insert a line <<<SHEET:SheetName>>> before each sheet's CSV.
+   - .docx / .pdf -> clean Markdown (headings # through ####, bullet lists, tables, **bold**, fenced code blocks). It is converted to the final format automatically.
+   - .pptx -> slides: each slide starts with a line <<<SLIDE>>>. The first line of a slide is its title (you may prefix it with #); following "- " lines are its bullets (max ~6, concise; don't write paragraphs).
+   - any other extension (.py, .js, .ts, .html, .css, .csv, .json, .md, .txt, .sql, .yaml, .svg, .ics, .vcf, .sh, …) -> the exact final file content.
+3. End each file with a line: <<<END>>>
+4. After the last file, add 1-2 short sentences summarizing what you made. Nothing else.
+
+Rules:
+- The filename extension MUST match what the user asked for: they say PDF -> .pdf; Word/doc -> .docx; Excel/spreadsheet -> .xlsx; slides/deck/presentation -> .pptx. Never silently downgrade a requested format to .md or .txt.
+- The content must be complete and immediately usable — no placeholders, no "TODO", no ellipses, no truncation, no commentary inside the file.
+- Code must be correct and runnable. Data files must be fully filled in with real, plausible values. Documents must be thorough and well structured.
+- Multiple files: repeat the FILE…END block for each (max 6), then one summary.
+- Never wrap file bodies in markdown code fences. Never mention or explain this protocol.
+- The user may have attached files — their contents appear as [attached file: …] blocks in the message. Use them as the source of truth when composing (e.g. convert, clean up, or extend their data).
+- If the user wants a picture/image, don't compose one — answer normally and suggest the Image toggle.
+- Write the file content and the summary in the user's language unless the format dictates otherwise (code, data schemas).`;
 
 const MAX_MESSAGE = 8000;
 const HISTORY_TURNS = 30; /* messages of context (bounded, not limited per day) */
@@ -158,6 +186,9 @@ async function pumpStream(
   return { content, reasoning };
 }
 
+/* ---------------- file-composition protocol parser ----------------
+   lives in src/lib/ai-compose.ts (ComposeParser) — see header there */
+
 export async function POST(req: Request) {
   let body: {
     sessionId?: string;
@@ -167,6 +198,7 @@ export async function POST(req: Request) {
     attachments?: unknown;
     webSearch?: boolean;
     imageMode?: boolean;
+    fileMode?: boolean;
     mode?: string;
     regenerate?: boolean;
     edit?: { messageId?: string; text?: string } | null;
@@ -200,6 +232,7 @@ export async function POST(req: Request) {
   const instructions = (body.instructions ?? "").slice(0, 1000);
   const webSearch = body.webSearch === true;
   const imageMode = body.imageMode === true;
+  const fileMode = body.fileMode === true && !imageMode;
 
   /* find the conversation (replay paths require an existing one) */
   let conversation = body.conversationId
@@ -605,17 +638,26 @@ export async function POST(req: Request) {
             }
           }
 
-          /* ============ PHASE 2 — the final answer ============ */
-          send("status", { stage: "writing" });
+          /* ============ PHASE 2 — final answer (or file composition) ============ */
+          send("status", { stage: fileMode ? "composing" : "writing" });
 
-          const sys = systemMsg +
-            (searchContext
-              ? `\n\nWEB SEARCH MODE: fresh search results are appended below. Ground your answer in them, cite sources inline as markdown links like [source](url), and end with a "Sources" list of the links you used. If the results don't fully answer the question, say what's missing.`
-              : "");
+          const sys = fileMode
+            ? (instructions.trim()
+                ? `${COMPOSE_SYSTEM}\n\nThe user's custom instructions: ${instructions.trim()}`
+                : COMPOSE_SYSTEM) +
+              (searchContext
+                ? "\n\nWEB SEARCH MODE: fresh search results are appended below — use them as the factual basis for the file you compose."
+                : "")
+            : systemMsg +
+              (searchContext
+                ? `\n\nWEB SEARCH MODE: fresh search results are appended below. Ground your answer in them, cite sources inline as markdown links like [source](url), and end with a "Sources" list of the links you used. If the results don't fully answer the question, say what's missing.`
+                : "");
 
           const finalUserContent =
             mode === "reasoning" && think
-              ? `${promptText + searchContext}\n\n[your private reasoning notes]\n${think}\n[end notes — write the final answer now; do not repeat the notes]`
+              ? `${promptText + searchContext}\n\n[your private reasoning notes]\n${think}\n[end notes — ${
+                  fileMode ? "compose the file now" : "write the final answer now"
+                }; do not repeat the notes]`
               : promptText + searchContext;
 
           const messages = [
@@ -645,21 +687,96 @@ export async function POST(req: Request) {
               ? await zai.chat.completions.createVision({
                   messages: messages as never,
                   stream: true,
-                  thinking: thinkingCfg,
+                  thinking: fileMode ? { type: "disabled" as const } : thinkingCfg,
                 } as never)
               : await zai.chat.completions.create({
                   messages,
-                  thinking: thinkingCfg,
+                  thinking: fileMode ? { type: "disabled" as const } : thinkingCfg,
                   stream: true,
                 });
 
-          const res = await pumpStream(
-            completion,
-            (t) => send("reasoning", { text: t }),
-            (t) => send("delta", { text: t })
-          );
-          reply = res.content;
-          if (res.reasoning) think = think ? `${think}\n${res.reasoning}` : res.reasoning;
+          if (fileMode) {
+            /* ---- FILE MODE: parse the protocol, build real files ---- */
+            const parser = new ComposeParser();
+            const res = await pumpStream(
+              completion,
+              (t) => send("reasoning", { text: t }),
+              (t) =>
+                parser.feed(t, {
+                  onProse: (p) => send("delta", { text: p }),
+                  onFileStart: (name) => send("fileStart", { name }),
+                  onFileDelta: (name, d) => send("fileDelta", { name, text: d }),
+                })
+            );
+            parser.end();
+
+            const built: AttMeta[] = [];
+            const notes: string[] = [];
+            for (const f of parser.files.slice(0, MAX_COMPOSE_FILES)) {
+              if (!f.content.trim()) continue;
+              try {
+                send("status", { stage: "building", detail: f.name });
+                /* extension drift safety net: the model sometimes emits
+                   .md/.txt when the user explicitly asked for pdf/docx/
+                   pptx/xlsx — swap in the requested extension */
+                const want = retargetExt(f.name, turnText);
+                const finalName = want
+                  ? `${f.name.replace(/\.[^.]*$/, "") || "file"}.${want}`
+                  : f.name;
+                const builtFile = await buildFile(finalName, f.content);
+                await mkdir(UPLOAD_DIR, { recursive: true });
+                const rec = await db.aIFile.create({
+                  data: {
+                    sessionId,
+                    conversationId,
+                    name: builtFile.name,
+                    mime: builtFile.mime,
+                    size: builtFile.buf.length,
+                    kind: builtFile.kind,
+                    path: "",
+                    status: "processing",
+                  },
+                });
+                const filePath = path.join(UPLOAD_DIR, `${rec.id}__${builtFile.name}`);
+                await writeFile(filePath, builtFile.buf);
+                const saved = await db.aIFile.update({
+                  where: { id: rec.id },
+                  data: {
+                    path: filePath,
+                    extracted: `AI-composed ${builtFile.mime} from request: ${turnText.slice(0, 300)}`,
+                    status: "ready",
+                  },
+                });
+                built.push(...attMetas([saved]));
+                if (builtFile.note) notes.push(`${builtFile.name}: ${builtFile.note}`);
+              } catch (e) {
+                notes.push(
+                  `couldn't build ${f.name || "file"}: ${e instanceof Error ? e.message : "unknown error"}`
+                );
+              }
+            }
+            if (built.length) assistantAtts = built;
+
+            let summary = parser.prose.trim();
+            if (!summary)
+              summary = built.length
+                ? `Created ${built.length} file${built.length > 1 ? "s" : ""}: ${built
+                    .map((b) => `\`${b.name}\``)
+                    .join(", ")}.`
+                : "";
+            const noteText = notes.length ? `\n\n_Note: ${notes.join(" · ")}_` : "";
+            if (noteText) send("delta", { text: noteText });
+            reply = summary + noteText || res.content;
+            if (res.reasoning) think = think ? `${think}\n${res.reasoning}` : res.reasoning;
+          } else {
+            const res = await pumpStream(
+              completion,
+              (t) => send("reasoning", { text: t }),
+              (t) => send("delta", { text: t })
+            );
+            reply = res.content;
+            if (res.reasoning) think = think ? `${think}\n${res.reasoning}` : res.reasoning;
+          }
         }
 
         if (!reply.trim()) {

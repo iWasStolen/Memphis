@@ -62,6 +62,10 @@ import {
   Brain,
   Pencil,
   CornerDownRight,
+  FilePlus2,
+  ChevronDown,
+  ChevronUp,
+  FileDown,
   FileText,
   FileCode2,
   FileArchive,
@@ -90,6 +94,7 @@ interface AIMsg {
   attachments?: AttMeta[] | null;
   reasoning?: string;
   mode?: string;
+  fileLive?: { name: string; content: string };
 }
 
 interface UploadingFile {
@@ -119,6 +124,8 @@ const STATUS_LABEL: Record<string, string> = {
   searching: "Searching the web…",
   reading: "Reading sources…",
   painting: "Painting your image…",
+  composing: "Composing your file…",
+  building: "Building your file…",
   reasoning: "reasoning deeply",
   writing: "thinking",
 };
@@ -127,16 +134,50 @@ function fmtSize(n: number): string {
   return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 }
 
-function AttIcon({ kind, className }: { kind: string; className?: string }) {
-  if (kind === "image" || kind === "generated") return <ImageIcon className={className} />;
+/* extensions whose raw bytes can be shown as text in a preview */
+const TEXT_PREVIEW_EXTS = new Set([
+  "txt", "md", "markdown", "log", "csv", "tsv", "json", "jsonl", "ndjson", "xml", "rss",
+  "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "properties", "html", "htm", "css",
+  "scss", "less", "js", "mjs", "cjs", "jsx", "ts", "tsx", "py", "rb", "go", "rs", "java",
+  "kt", "c", "h", "cpp", "hpp", "cc", "cs", "swift", "m", "mm", "php", "pl", "lua", "sh",
+  "bash", "zsh", "fish", "ps1", "bat", "sql", "r", "jl", "dart", "scala", "clj", "ex",
+  "exs", "erl", "hs", "vue", "svelte", "graphql", "gql", "svg", "ics", "vcf", "srt", "vtt",
+]);
+
+function isTextPreviewable(a: { name: string; mime: string }): boolean {
+  if (a.mime.startsWith("text/")) return true;
+  const ext = a.name.includes(".") ? (a.name.split(".").pop() ?? "").toLowerCase() : "";
+  return TEXT_PREVIEW_EXTS.has(ext);
+}
+
+function AttIcon({
+  kind,
+  name,
+  mime,
+  className,
+}: {
+  kind: string;
+  name?: string;
+  mime?: string;
+  className?: string;
+}) {
+  const m = mime ?? "";
+  const ext = (name ?? "").includes(".") ? (name ?? "").split(".").pop()!.toLowerCase() : "";
+  if (
+    kind === "image" ||
+    (kind === "generated" && (m.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"].includes(ext)))
+  )
+    return <ImageIcon className={className} />;
   if (kind === "audio") return <AudioLines className={className} />;
   if (kind === "video") return <Film className={className} />;
-  if (kind === "pdf" || kind === "word" || kind === "ebook") return <FileText className={className} />;
-  if (kind === "sheet") return <Table className={className} />;
-  if (kind === "slides") return <Presentation className={className} />;
+  if (kind === "pdf") return <FileText className={className} />;
+  if (kind === "sheet" || ["xlsx", "xls", "csv", "tsv"].includes(ext)) return <Table className={className} />;
+  if (kind === "slides" || ext === "pptx") return <Presentation className={className} />;
+  if (kind === "word" || ["docx", "doc", "rtf", "odt"].includes(ext)) return <FileText className={className} />;
+  if (kind === "ebook") return <FileText className={className} />;
   if (kind === "archive") return <FileArchive className={className} />;
   if (kind === "code") return <FileCode2 className={className} />;
-  if (kind === "data") return <Braces className={className} />;
+  if (kind === "data" || ["json", "xml", "yml", "yaml", "toml"].includes(ext)) return <Braces className={className} />;
   return <File className={className} />;
 }
 
@@ -280,7 +321,7 @@ function AttChip({ att, onRemove }: { att: AttMeta; onRemove?: () => void }) {
         className="inline-flex items-center gap-1.5 min-w-0 hover:text-white"
         title={`${att.name} · ${fmtSize(att.size)} — open`}
       >
-        <AttIcon kind={att.kind} className="size-3.5 shrink-0 text-[#8a8a8a]" />
+        <AttIcon kind={att.kind} name={att.name} mime={att.mime} className="size-3.5 shrink-0 text-[#8a8a8a]" />
         <span className="truncate">{att.name}</span>
         <span className="shrink-0 text-[#555]">{fmtSize(att.size)}</span>
       </a>
@@ -294,6 +335,120 @@ function AttChip({ att, onRemove }: { att: AttMeta; onRemove?: () => void }) {
         </button>
       )}
     </span>
+  );
+}
+
+/* ---------------- generated-file card (AI-composed output) ---------------- */
+
+function FileCard({ att }: { att: AttMeta }) {
+  const sid = aiSessionId();
+  const raw = `/api/ai/files/${att.id}/raw?sessionId=${encodeURIComponent(sid)}`;
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const isImage = att.mime.startsWith("image/");
+  const isPdf = att.mime === "application/pdf";
+  const texty = isTextPreviewable(att) && !isImage;
+  const ext = att.name.includes(".") ? (att.name.split(".").pop() ?? "FILE").toUpperCase() : "FILE";
+
+  const toggle = async () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (texty && text === null && !loading) {
+      setLoading(true);
+      try {
+        const r = await fetch(raw);
+        const t = await r.text();
+        setText(t.slice(0, 8000));
+      } catch {
+        setText("(could not load the preview — use Open or Save instead)");
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-[#242424] bg-[#070707] overflow-hidden">
+      <div className="flex items-center gap-2.5 px-3 py-2.5">
+        <span className="grid place-items-center size-8 rounded-lg bg-[#121a24] border border-[#1f2c3a] shrink-0">
+          <AttIcon kind={att.kind} name={att.name} mime={att.mime} className="size-4 text-[#9fd0ff]" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[13px] text-white font-medium leading-tight" title={att.name}>
+            {att.name}
+          </p>
+          <p className="text-[11px] text-[#666] mt-0.5">
+            {ext} · {fmtSize(att.size)} · AI-composed
+          </p>
+        </div>
+        {(texty || isImage || isPdf) && (
+          <button
+            onClick={() => void toggle()}
+            aria-expanded={open}
+            className="shrink-0 inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11.5px] text-[#bbb] hover:text-white hover:bg-[#161616] transition-colors"
+          >
+            {open ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />} Preview
+          </button>
+        )}
+        <a
+          href={raw}
+          target="_blank"
+          rel="noreferrer"
+          className="shrink-0 inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11.5px] text-[#bbb] hover:text-white hover:bg-[#161616] transition-colors"
+        >
+          Open
+        </a>
+        <a
+          href={`${raw}&download=1`}
+          download={att.name}
+          className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11.5px] text-white bg-[#1d1d1d] border border-[#333] hover:bg-[#292929] transition-colors"
+        >
+          <FileDown className="size-3.5" /> Save
+        </a>
+      </div>
+      {open && (
+        <div className="border-t border-[#1d1d1d]">
+          {isImage ? (
+            <img src={raw} alt={att.name} loading="lazy" className="max-h-[380px] w-auto mx-auto py-3" />
+          ) : isPdf ? (
+            <iframe src={raw} title={att.name} className="w-full h-[460px] bg-[#0d0d0d]" />
+          ) : loading ? (
+            <p className="px-3 py-3 text-[12px] text-[#777] flex items-center gap-2">
+              <Loader2 className="size-3.5 animate-spin" /> loading preview…
+            </p>
+          ) : (
+            <pre className="max-h-72 overflow-auto memphis-scroll px-3 py-2.5 text-[11.5px] leading-relaxed text-[#b5b5b5] whitespace-pre-wrap break-words">
+              {text}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- live "composing…" box (File mode streaming) ---------------- */
+
+function LiveFileBox({ live }: { live: { name: string; content: string } }) {
+  const long = live.content.length > 4000;
+  const shown = long ? live.content.slice(-4000) : live.content;
+  return (
+    <div className="mb-2 rounded-xl border border-[#1e2a3a] bg-[#070b10] overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[#14202e]">
+        <FilePlus2 className="size-3.5 text-[#7cc4ff] shrink-0" />
+        <span className="text-[11.5px] text-[#9fd0ff] font-medium truncate">composing {live.name}</span>
+        <span className="ml-auto text-[10.5px] text-[#55697a] font-mono shrink-0">
+          {live.content.length.toLocaleString()} chars
+        </span>
+      </div>
+      <pre className="max-h-40 overflow-y-auto memphis-scroll px-3 py-2 text-[11px] leading-relaxed text-[#8a8a8a] whitespace-pre-wrap break-words">
+        {long ? `…\n${shown}` : shown}
+      </pre>
+    </div>
   );
 }
 
@@ -358,6 +513,7 @@ export default function AiView() {
   const [uploading, setUploading] = useState<UploadingFile[]>([]);
   const [webSearch, setWebSearch] = useState(false);
   const [imageMode, setImageMode] = useState(false);
+  const [fileMode, setFileMode] = useState(false);
   const [status, setStatus] = useState("");
   const [dragging, setDragging] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -726,6 +882,7 @@ export default function AiView() {
           attachments: opts.atts.map((a) => a.id),
           webSearch,
           imageMode,
+          fileMode,
           mode,
           ...(opts.regenerate ? { regenerate: true } : {}),
           ...(opts.editMessageId ? { edit: { messageId: opts.editMessageId, text: opts.text } } : {}),
@@ -795,6 +952,27 @@ export default function AiView() {
             setMessages((m) =>
               m.map((msg) => (msg.id === "stream" ? { ...msg, content: acc } : msg))
             );
+          } else if (event === "fileStart" && typeof payload.name === "string") {
+            const fname = payload.name;
+            setStatus("");
+            setMessages((m) =>
+              m.map((msg) => (msg.id === "stream" ? { ...msg, fileLive: { name: fname, content: "" } } : msg))
+            );
+          } else if (event === "fileDelta" && typeof payload.text === "string") {
+            const piece = payload.text;
+            setMessages((m) =>
+              m.map((msg) =>
+                msg.id === "stream" && msg.fileLive
+                  ? {
+                      ...msg,
+                      fileLive: {
+                        ...msg.fileLive,
+                        content: (msg.fileLive.content + piece).slice(-16000),
+                      },
+                    }
+                  : msg
+              )
+            );
           } else if (event === "error") {
             throw new Error(String(payload.message || "The model is unavailable."));
           } else if (event === "done") {
@@ -815,6 +993,7 @@ export default function AiView() {
                       attachments: streamAtts ?? undefined,
                       reasoning: doneReasoning || undefined,
                       mode: doneMode,
+                      fileLive: undefined,
                     }
                   : msg
               )
@@ -853,7 +1032,7 @@ export default function AiView() {
              reply + thinking already streamed (Stop button) */
           .map((x) =>
             x.id === "stream"
-              ? { ...x, id: "aborted-" + Date.now(), streaming: false }
+              ? { ...x, id: "aborted-" + Date.now(), streaming: false, fileLive: undefined }
               : x
           )
           .filter((x) => x.role === "user" || x.content || x.reasoning)
@@ -1156,7 +1335,7 @@ export default function AiView() {
           <Sparkles className="size-4 text-white" />
           <h1 className="text-sm font-semibold text-white">Memphis AI</h1>
           <span className="text-[11px] text-[#555] hidden lg:inline">
-            files · vision · voice · search · images · reasoning
+            files in & out · vision · voice · search · images · reasoning
           </span>
           <div className="ml-auto flex items-center gap-2">
             {messages.length > 0 && (
@@ -1208,7 +1387,8 @@ export default function AiView() {
                   A real AI chat running on GLM — free, unlimited, no account needed.
                 </p>
                 <div className="mt-3 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] text-[#666]">
-                  <span className="inline-flex items-center gap-1"><Paperclip className="size-3" /> any file</span>
+                  <span className="inline-flex items-center gap-1"><Paperclip className="size-3" /> any file in</span>
+                  <span className="inline-flex items-center gap-1"><FilePlus2 className="size-3" /> files out</span>
                   <span className="inline-flex items-center gap-1"><ImageIcon className="size-3" /> vision</span>
                   <span className="inline-flex items-center gap-1"><Mic className="size-3" /> voice</span>
                   <span className="inline-flex items-center gap-1"><Globe className="size-3" /> web search</span>
@@ -1218,8 +1398,10 @@ export default function AiView() {
                 <div className="mt-6 grid sm:grid-cols-2 gap-2 text-left">
                   {[
                     "Summarize a PDF — attach it below",
+                    "Make a weekly meal-plan spreadsheet (.xlsx)",
                     "Search the web for today's tech news",
                     "Generate an image of a neon city at night",
+                    "Write a Python script that renames photos by date",
                     "Explain the Monty Hall problem step by step",
                   ].map((s) => (
                     <button
@@ -1268,28 +1450,37 @@ export default function AiView() {
                         </button>
                       )}
                     </>
-                  ) : m.content ? (
+                  ) : (
                     <>
                       {m.reasoning ? (
                         <ThinkBlock text={m.reasoning} streaming={m.streaming} />
                       ) : null}
-                      <Md text={m.content} />
-                    </>
-                  ) : (
-                    <>
-                      {m.reasoning ? <ThinkBlock text={m.reasoning} streaming /> : null}
-                      <span className="flex items-center gap-1.5 text-[13px] text-[#777]">
-                        <span className="boot-pulse">{busyLabel || "thinking"}</span>
-                        <span className="flex gap-0.5">
-                          {[0, 1, 2].map((i) => (
-                            <span
-                              key={i}
-                              className="size-1 rounded-full bg-[#777]"
-                              style={{ animation: `blink 1.2s ${i * 0.2}s infinite` }}
-                            />
-                          ))}
+                      {m.fileLive ? <LiveFileBox live={m.fileLive} /> : null}
+                      {m.content ? (
+                        <>
+                          <Md text={m.content} />
+                          {m.attachments && m.attachments.length > 0 && (
+                            <div className="mt-2 space-y-2">
+                              {m.attachments.map((a) => (
+                                <FileCard key={a.id} att={a} />
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <span className="flex items-center gap-1.5 text-[13px] text-[#777]">
+                          <span className="boot-pulse">{busyLabel || "thinking"}</span>
+                          <span className="flex gap-0.5">
+                            {[0, 1, 2].map((i) => (
+                              <span
+                                key={i}
+                                className="size-1 rounded-full bg-[#777]"
+                                style={{ animation: `blink 1.2s ${i * 0.2}s infinite` }}
+                              />
+                            ))}
+                          </span>
                         </span>
-                      </span>
+                      )}
                     </>
                   )}
                   {m.role === "assistant" && m.content && !m.streaming && (
@@ -1450,7 +1641,9 @@ export default function AiView() {
                 placeholder={
                   imageMode
                     ? "Describe the image to create — or attach one to edit it…"
-                    : "Ask anything — attach files, paste images, or drop them here"
+                    : fileMode
+                      ? "Describe the file to create — a budget spreadsheet, a Python script, a slide deck…"
+                      : "Ask anything — attach files, paste images, or drop them here"
                 }
                 rows={2}
                 maxLength={8000}
@@ -1532,6 +1725,7 @@ export default function AiView() {
                   onClick={() => {
                     setImageMode((v) => !v);
                     if (webSearch) setWebSearch(false);
+                    if (fileMode) setFileMode(false);
                   }}
                   aria-pressed={imageMode}
                   title="Create or edit images"
@@ -1542,6 +1736,22 @@ export default function AiView() {
                   }`}
                 >
                   <Palette className="size-3.5" /> Image
+                </button>
+
+                <button
+                  onClick={() => {
+                    setFileMode((v) => !v);
+                    if (imageMode) setImageMode(false);
+                  }}
+                  aria-pressed={fileMode}
+                  title="Compose a downloadable file — xlsx, docx, pptx, pdf, code, data…"
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] border transition-colors ${
+                    fileMode
+                      ? "bg-white text-black border-white"
+                      : "border-[#262626] text-[#999] hover:text-white hover:bg-[#161616]"
+                  }`}
+                >
+                  <FilePlus2 className="size-3.5" /> File
                 </button>
 
                 <div className="ml-auto flex items-center gap-1.5">
@@ -1596,7 +1806,9 @@ export default function AiView() {
                       : busyLabel
                         ? `${busyLabel}`
                         : "GLM is writing…"
-                    : "Enter to send · Shift+Enter for newline"}
+                    : fileMode
+                      ? "File mode — I'll compose a real, downloadable file (.xlsx .docx .pptx .pdf .csv .py …)"
+                      : "Enter to send · Shift+Enter for newline"}
               </span>
               {attached.length > 0 && (
                 <span className="text-[11px] text-[#666]">
