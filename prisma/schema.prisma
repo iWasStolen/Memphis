@@ -139,10 +139,32 @@ model AIMessage {
   conversationId String
   role           String // user | assistant
   content        String
+  attachments    Json? // [{ id, name, kind, size, mime }] — files tied to this message
   conversation   AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   createdAt      DateTime       @default(now())
 
   @@index([conversationId, createdAt])
+}
+
+/* Files uploaded to Memphis AI (and images it generates).
+   Bytes live on disk under upload/ai/, extracted knowledge in `extracted`
+   so the model can use files across turns without reprocessing. */
+model AIFile {
+  id             String   @id @default(cuid())
+  sessionId      String
+  conversationId String?
+  name           String
+  mime           String
+  size           Int
+  kind           String // image | audio | video | pdf | word | sheet | slides | archive | text | code | data | ebook | generated | other
+  path           String // absolute path on disk
+  extracted      String   @default("") // extracted text / transcription / vision description
+  status         String   @default("processing") // processing | ready | error
+  error          String   @default("")
+  createdAt      DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([conversationId])
 }
 
 model ModAction {

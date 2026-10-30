@@ -4,6 +4,15 @@
    Memphis AI — a real chat backed by GLM (via z-ai-web-dev-sdk
    on the server). Free, no sign-in, no token limits. Streams
    token-by-token over SSE and renders markdown.
+
+   Full toolbox:
+   - Attach ANY file (button / drag-drop / paste) — the server
+     extracts text, transcribes audio, describes images & video
+   - Live vision: attached images go straight to the vision model
+   - Web search toggle with cited sources
+   - Image mode: generate or edit pictures
+   - Voice input (mic → ASR) and read-aloud (TTS)
+   - Export the conversation as markdown
    ============================================================ */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -37,13 +46,46 @@ import {
   Infinity as InfinityIcon,
   Menu,
   Loader2,
+  Paperclip,
+  Globe,
+  Palette,
+  Mic,
+  Square,
+  Download,
+  Volume2,
+  X,
+  FileText,
+  FileCode2,
+  FileArchive,
+  Film,
+  Table,
+  Presentation,
+  Braces,
+  File,
+  AudioLines,
+  Image as ImageIcon,
 } from "lucide-react";
+
+interface AttMeta {
+  id: string;
+  name: string;
+  kind: string;
+  size: number;
+  mime: string;
+}
 
 interface AIMsg {
   id: string;
   role: string;
   content: string;
   streaming?: boolean;
+  attachments?: AttMeta[] | null;
+}
+
+interface UploadingFile {
+  key: string;
+  name: string;
+  pct: number;
 }
 
 interface ConversationRow {
@@ -60,6 +102,91 @@ interface Flashcard {
 }
 
 const FLASHCARD_KEY = "memphis-flashcards";
+const MAX_ATTACH = 6;
+
+const STATUS_LABEL: Record<string, string> = {
+  searching: "Searching the web…",
+  reading: "Reading sources…",
+  painting: "Painting your image…",
+  writing: "thinking",
+};
+
+function fmtSize(n: number): string {
+  return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+function AttIcon({ kind, className }: { kind: string; className?: string }) {
+  if (kind === "image" || kind === "generated") return <ImageIcon className={className} />;
+  if (kind === "audio") return <AudioLines className={className} />;
+  if (kind === "video") return <Film className={className} />;
+  if (kind === "pdf" || kind === "word" || kind === "ebook") return <FileText className={className} />;
+  if (kind === "sheet") return <Table className={className} />;
+  if (kind === "slides") return <Presentation className={className} />;
+  if (kind === "archive") return <FileArchive className={className} />;
+  if (kind === "code") return <FileCode2 className={className} />;
+  if (kind === "data") return <Braces className={className} />;
+  return <File className={className} />;
+}
+
+/* split a message into TTS-sized chunks (API limit is 1024 chars) */
+function splitForTts(text: string, max = 950): string[] {
+  const clean = text
+    .replace(/```[\s\S]*?```/g, " — code block omitted — ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " — image — ");
+  const sentences = clean.match(/[^.!?\n]+[.!?]*\s*/g) ?? [clean];
+  const chunks: string[] = [];
+  let cur = "";
+  for (const s of sentences) {
+    if ((cur + s).length > max) {
+      if (cur.trim()) chunks.push(cur);
+      if (s.length > max) {
+        for (let i = 0; i < s.length; i += max) chunks.push(s.slice(i, i + max));
+        cur = "";
+      } else cur = s;
+    } else cur += s;
+  }
+  if (cur.trim()) chunks.push(cur);
+  return chunks;
+}
+
+/* 16 kHz mono PCM WAV encoder (for voice input) */
+function encodeWav(buffer: AudioBuffer, targetRate = 16000): ArrayBuffer {
+  const src = buffer.getChannelData(0);
+  const ratio = buffer.sampleRate / targetRate;
+  const length = Math.max(1, Math.floor(src.length / ratio));
+  const data = new Float32Array(length);
+  for (let i = 0; i < length; i++) {
+    const pos = i * ratio;
+    const i0 = Math.floor(pos);
+    const i1 = Math.min(i0 + 1, src.length - 1);
+    const frac = pos - i0;
+    data[i] = src[i0] * (1 - frac) + src[i1] * frac;
+  }
+  const out = new ArrayBuffer(44 + length * 2);
+  const view = new DataView(out);
+  const wstr = (off: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+  };
+  wstr(0, "RIFF");
+  view.setUint32(4, 36 + length * 2, true);
+  wstr(8, "WAVE");
+  wstr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, targetRate, true);
+  view.setUint32(28, targetRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  wstr(36, "data");
+  view.setUint32(40, length * 2, true);
+  let off = 44;
+  for (let i = 0; i < length; i++, off += 2) {
+    const s = Math.max(-1, Math.min(1, data[i]));
+    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return out;
+}
 
 /* ---------------- markdown renderer ---------------- */
 
@@ -107,11 +234,54 @@ function Md({ text }: { text: string }) {
               </a>
             );
           },
+          img(props) {
+            const { src, alt } = props;
+            if (!src || typeof src !== "string") return null;
+            return (
+              <img
+                src={src}
+                alt={alt ?? ""}
+                loading="lazy"
+                onClick={() => window.open(src, "_blank")}
+                className="max-w-full max-h-[420px] rounded-lg border border-[#222] my-2 cursor-zoom-in hover:border-[#444] transition-colors"
+              />
+            );
+          },
         }}
       >
         {text}
       </ReactMarkdown>
     </div>
+  );
+}
+
+/* ---------------- attachment chip ---------------- */
+
+function AttChip({ att, onRemove }: { att: AttMeta; onRemove?: () => void }) {
+  const sid = aiSessionId();
+  return (
+    <span className="inline-flex items-center gap-1.5 max-w-[220px] rounded-lg border border-[#262626] bg-[#111] pl-2 pr-1 py-1 text-[11.5px] text-[#ccc]">
+      <a
+        href={`/api/ai/files/${att.id}/raw?sessionId=${encodeURIComponent(sid)}`}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1.5 min-w-0 hover:text-white"
+        title={`${att.name} · ${fmtSize(att.size)} — open`}
+      >
+        <AttIcon kind={att.kind} className="size-3.5 shrink-0 text-[#8a8a8a]" />
+        <span className="truncate">{att.name}</span>
+        <span className="shrink-0 text-[#555]">{fmtSize(att.size)}</span>
+      </a>
+      {onRemove && (
+        <button
+          onClick={onRemove}
+          aria-label={`Remove ${att.name}`}
+          className="shrink-0 p-0.5 rounded text-[#666] hover:text-white hover:bg-[#1d1d1d]"
+        >
+          <X className="size-3" />
+        </button>
+      )}
+    </span>
   );
 }
 
@@ -134,8 +304,26 @@ export default function AiView() {
   const [savingInstructions, setSavingInstructions] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  /* new: files & tools */
+  const [attached, setAttached] = useState<AttMeta[]>([]);
+  const [uploading, setUploading] = useState<UploadingFile[]>([]);
+  const [webSearch, setWebSearch] = useState(false);
+  const [imageMode, setImageMode] = useState(false);
+  const [status, setStatus] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordSecs, setRecordSecs] = useState(0);
+  const [transcribing, setTranscribing] = useState(false);
+  const [speaking, setSpeaking] = useState<{ id: string; loading: boolean } | null>(null);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const speechTokenRef = useRef(0);
   /* while a reply is streaming, the `meta` event flips activeId to the
      (possibly new) conversation id — the history-refetch effect must NOT
      run then, or it replaces the streamed placeholder with the server's
@@ -185,6 +373,14 @@ export default function AiView() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, sending]);
 
+  /* recording timer */
+  useEffect(() => {
+    if (!recording) return;
+    setRecordSecs(0);
+    const t = setInterval(() => setRecordSecs((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [recording]);
+
   /* ---------- actions ---------- */
   const newChat = () => {
     if (sending) abortRef.current?.abort();
@@ -193,19 +389,240 @@ export default function AiView() {
     setInstructions("");
     setInstructionsDraft("");
     setError("");
+    setAttached([]);
+    setStatus("");
     setSidebarOpen(false);
   };
 
+  /* ---------- file uploads (XHR for progress) ---------- */
+  const uploadOne = (file: File) =>
+    new Promise<AttMeta | null>((resolve) => {
+      const sid = aiSessionId();
+      if (!sid) return resolve(null);
+      const fd = new FormData();
+      fd.append("sessionId", sid);
+      fd.append("file", file);
+      const key = "up-" + Math.random().toString(36).slice(2);
+      setUploading((u) => [...u, { key, name: file.name, pct: 0 }]);
+      const xhr = new XMLHttpRequest();
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          setUploading((u) => u.map((x) => (x.key === key ? { ...x, pct } : x)));
+        }
+      };
+      const done = () => setUploading((u) => u.filter((x) => x.key !== key));
+      xhr.onload = () => {
+        done();
+        try {
+          const data = JSON.parse(xhr.responseText) as {
+            files?: AttMeta[];
+            errors?: { name: string; error: string }[];
+            error?: string;
+          };
+          if (xhr.status === 200 && data.files?.length) {
+            if (data.errors?.length) setError(`${data.errors[0].name}: ${data.errors[0].error}`);
+            resolve(data.files[0]);
+          } else {
+            setError(data.error || data.errors?.[0]?.error || `Upload failed (${xhr.status})`);
+            resolve(null);
+          }
+        } catch {
+          setError("Upload failed — the server sent an invalid response.");
+          resolve(null);
+        }
+      };
+      xhr.onerror = () => {
+        done();
+        setError(`Could not upload ${file.name} — check your connection.`);
+        resolve(null);
+      };
+      xhr.open("POST", "/api/ai/files");
+      xhr.send(fd);
+    });
+
+  const uploadFiles = useCallback(async (list: FileList | File[]) => {
+    const files = Array.from(list).filter((f) => f.size > 0);
+    if (!files.length) return;
+    setError("");
+    const room = MAX_ATTACH - attached.length - uploading.length;
+    if (room <= 0) {
+      setError(`Up to ${MAX_ATTACH} files per message.`);
+      return;
+    }
+    const batch = files.slice(0, room);
+    if (files.length > batch.length) setError(`Only ${batch.length} more file(s) fit on this message.`);
+    const metas = await Promise.all(batch.map(uploadOne));
+    const ok = metas.filter((m): m is AttMeta => !!m);
+    if (ok.length) setAttached((a) => [...a, ...ok].slice(0, MAX_ATTACH));
+  }, [attached.length, uploading.length]);
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    if (e.dataTransfer?.files?.length) void uploadFiles(e.dataTransfer.files);
+  };
+
+  const onPaste = (e: React.ClipboardEvent) => {
+    if (e.clipboardData?.files?.length) {
+      e.preventDefault();
+      void uploadFiles(e.clipboardData.files);
+    }
+  };
+
+  /* ---------- voice input ---------- */
+  const startRecording = async () => {
+    setError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      rec.onstop = () => stream.getTracks().forEach((t) => t.stop());
+      recorderRef.current = rec;
+      rec.start();
+      setRecording(true);
+    } catch {
+      setError("Microphone unavailable — check browser permissions.");
+    }
+  };
+
+  const stopRecording = async () => {
+    const rec = recorderRef.current;
+    if (!rec) return;
+    setRecording(false);
+    setTranscribing(true);
+    try {
+      await new Promise<void>((res) => {
+        rec.onstop = () => res();
+        rec.stop();
+      });
+      const blob = new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" });
+      chunksRef.current = [];
+      if (!blob.size) throw new Error("nothing recorded");
+      const ctx = new AudioContext();
+      const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+      await ctx.close();
+      const wav = encodeWav(decoded, 16000);
+      const fd = new FormData();
+      fd.append("file", new Blob([wav], { type: "audio/wav" }));
+      const r = await fetch("/api/ai/transcribe", { method: "POST", body: fd });
+      const data = (await r.json().catch(() => ({}))) as { text?: string; error?: string };
+      if (r.ok && data.text) {
+        const t = data.text;
+        setInput((p) => (p ? `${p} ${t}`.slice(0, 8000) : t));
+      } else {
+        setError(data.error || "Could not transcribe — try again.");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Voice input failed.");
+    } finally {
+      setTranscribing(false);
+      recorderRef.current = null;
+    }
+  };
+
+  /* ---------- read aloud (TTS) ---------- */
+  const stopSpeaking = () => {
+    speechTokenRef.current++;
+    audioRef.current?.pause();
+    audioRef.current = null;
+    setSpeaking(null);
+  };
+
+  const speak = async (m: AIMsg) => {
+    if (speaking?.id === m.id) {
+      stopSpeaking();
+      return;
+    }
+    stopSpeaking();
+    const token = ++speechTokenRef.current;
+    setSpeaking({ id: m.id, loading: true });
+    try {
+      const chunks = splitForTts(m.content);
+      let first = true;
+      for (const chunk of chunks) {
+        if (speechTokenRef.current !== token) return;
+        const r = await fetch("/api/ai/tts", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text: chunk }),
+        });
+        if (!r.ok) throw new Error("speech failed");
+        if (first) {
+          setSpeaking({ id: m.id, loading: false });
+          first = false;
+        }
+        if (speechTokenRef.current !== token) return;
+        const blob = await r.blob();
+        await new Promise<void>((res) => {
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audioRef.current = audio;
+          audio.onended = () => {
+            URL.revokeObjectURL(url);
+            res();
+          };
+          audio.onerror = () => {
+            URL.revokeObjectURL(url);
+            res();
+          };
+          void audio.play().catch(() => {
+            URL.revokeObjectURL(url);
+            res();
+          });
+        });
+      }
+    } catch {
+      setError("Could not generate speech for this message.");
+    } finally {
+      if (speechTokenRef.current === token) setSpeaking(null);
+    }
+  };
+
+  /* ---------- export ---------- */
+  const exportChat = () => {
+    if (!messages.length) return;
+    const md = [
+      "# Memphis AI — chat export",
+      "",
+      ...messages.map((m) => {
+        const atts = m.attachments?.length
+          ? `\n\n_Attachments: ${m.attachments.map((a) => a.name).join(", ")}_`
+          : "";
+        return `**${m.role === "user" ? "You" : "Memphis AI"}:**\n\n${m.content}${atts}\n`;
+      }),
+    ].join("\n---\n\n");
+    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `memphis-chat-${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  /* ---------- send ---------- */
   const send = async () => {
     const text = input.trim();
-    if (!text || sending) return;
+    const atts = attached;
+    if ((!text && !atts.length) || sending || uploading.length) return;
     const sid = aiSessionId();
     if (!sid) return;
     setError("");
     setInput("");
+    setAttached([]);
+    setStatus("");
     setSending(true);
+    stopSpeaking();
 
-    const userMsg: AIMsg = { id: "local-" + Date.now(), role: "user", content: text };
+    const userMsg: AIMsg = {
+      id: "local-" + Date.now(),
+      role: "user",
+      content: text || "(files attached — please review them)",
+      attachments: atts.length ? atts : undefined,
+    };
     const streamMsg: AIMsg = { id: "stream", role: "assistant", content: "", streaming: true };
     setMessages((m) => [...m, userMsg, streamMsg]);
     sendingRef.current = true;
@@ -222,6 +639,9 @@ export default function AiView() {
           conversationId: activeId,
           message: text,
           instructions: instructionsDraft,
+          attachments: atts.map((a) => a.id),
+          webSearch,
+          imageMode,
         }),
         signal: controller.signal,
       });
@@ -235,6 +655,7 @@ export default function AiView() {
       const decoder = new TextDecoder();
       let buffer = "";
       let acc = "";
+      let streamAtts: AttMeta[] | null = null;
 
       for (;;) {
         const { done, value } = await reader.read();
@@ -255,14 +676,20 @@ export default function AiView() {
           }
           if (event === "meta" && typeof payload.conversationId === "string") {
             setActiveId(payload.conversationId);
+          } else if (event === "status" && typeof payload.stage === "string") {
+            setStatus(payload.stage);
           } else if (event === "delta" && typeof payload.text === "string") {
             acc += payload.text;
+            setStatus("");
             setMessages((m) =>
               m.map((msg) => (msg.id === "stream" ? { ...msg, content: acc } : msg))
             );
           } else if (event === "error") {
             throw new Error(String(payload.message || "The model is unavailable."));
           } else if (event === "done") {
+            if (Array.isArray(payload.attachments)) {
+              streamAtts = payload.attachments as AttMeta[];
+            }
             setMessages((m) =>
               m.map((msg) =>
                 msg.id === "stream"
@@ -270,6 +697,7 @@ export default function AiView() {
                       id: String(payload.messageId ?? "saved"),
                       role: "assistant",
                       content: acc,
+                      attachments: streamAtts ?? undefined,
                     }
                   : msg
               )
@@ -293,6 +721,7 @@ export default function AiView() {
     } finally {
       sendingRef.current = false;
       setSending(false);
+      setStatus("");
       abortRef.current = null;
     }
   };
@@ -380,9 +809,38 @@ export default function AiView() {
 
   /* ---------- render ---------- */
   const card = cards[cardIdx];
+  const busyLabel =
+    status && STATUS_LABEL[status]
+      ? STATUS_LABEL[status]
+      : sending
+        ? "thinking"
+        : "";
 
   return (
-    <div className="flex-1 flex min-h-0 relative">
+    <div
+      className="flex-1 flex min-h-0 relative"
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) setDragging(false);
+      }}
+      onDrop={onDrop}
+    >
+      {/* drag overlay */}
+      {dragging && (
+        <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+          <div className="border-2 border-dashed border-white/50 rounded-2xl px-10 py-8 text-center">
+            <Paperclip className="size-8 mx-auto text-white mb-3" />
+            <p className="text-white font-semibold">Drop files to attach</p>
+            <p className="text-[12px] text-[#999] mt-1">
+              PDFs, docs, sheets, images, audio, video, code — anything
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* sidebar */}
       <aside
         className={`${sidebarOpen ? "flex" : "hidden"} md:flex absolute md:relative inset-0 md:inset-auto z-30 md:z-auto bg-black/95 md:bg-transparent flex-col w-64 md:w-60 shrink-0 border-r border-[#141414]`}
@@ -458,10 +916,21 @@ export default function AiView() {
           </Button>
           <Sparkles className="size-4 text-white" />
           <h1 className="text-sm font-semibold text-white">Memphis AI</h1>
-          <span className="text-[11px] text-[#555] hidden sm:inline">
-            powered by GLM
+          <span className="text-[11px] text-[#555] hidden lg:inline">
+            files · vision · voice · search · images
           </span>
           <div className="ml-auto flex items-center gap-2">
+            {messages.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={exportChat}
+                className="border-[#2a2a2a] text-white hover:bg-[#101010]"
+              >
+                <Download className="size-4 mr-1" />
+                <span className="hidden sm:inline">Export</span>
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -498,13 +967,19 @@ export default function AiView() {
                 <h2 className="text-lg text-white font-semibold">How can I help today?</h2>
                 <p className="text-[13px] text-[#777] mt-2">
                   A real AI chat running on GLM — free, unlimited, no account needed.
-                  Ask anything.
                 </p>
+                <div className="mt-3 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] text-[#666]">
+                  <span className="inline-flex items-center gap-1"><Paperclip className="size-3" /> any file</span>
+                  <span className="inline-flex items-center gap-1"><ImageIcon className="size-3" /> vision</span>
+                  <span className="inline-flex items-center gap-1"><Mic className="size-3" /> voice</span>
+                  <span className="inline-flex items-center gap-1"><Globe className="size-3" /> web search</span>
+                  <span className="inline-flex items-center gap-1"><Palette className="size-3" /> images</span>
+                </div>
                 <div className="mt-6 grid sm:grid-cols-2 gap-2 text-left">
                   {[
-                    "Explain how a scramjet engine works",
-                    "Write a Python script to rename my files",
-                    "Help me draft a message to my teacher",
+                    "Summarize a PDF — attach it below",
+                    "Search the web for today's tech news",
+                    "Generate an image of a neon city at night",
                     "Give me a 20-minute full-body workout plan",
                   ].map((s) => (
                     <button
@@ -531,14 +1006,23 @@ export default function AiView() {
                   }`}
                 >
                   {m.role === "user" ? (
-                    <p className="text-[13.5px] leading-relaxed whitespace-pre-wrap break-words">
-                      {m.content}
-                    </p>
+                    <>
+                      {m.attachments && m.attachments.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mb-2">
+                          {m.attachments.map((a) => (
+                            <AttChip key={a.id} att={a} />
+                          ))}
+                        </div>
+                      )}
+                      <p className="text-[13.5px] leading-relaxed whitespace-pre-wrap break-words">
+                        {m.content}
+                      </p>
+                    </>
                   ) : m.content ? (
                     <Md text={m.content} />
                   ) : (
                     <span className="flex items-center gap-1.5 text-[13px] text-[#777]">
-                      <span className="boot-pulse">thinking</span>
+                      <span className="boot-pulse">{busyLabel || "thinking"}</span>
                       <span className="flex gap-0.5">
                         {[0, 1, 2].map((i) => (
                           <span
@@ -551,17 +1035,34 @@ export default function AiView() {
                     </span>
                   )}
                   {m.role === "assistant" && m.content && !m.streaming && (
-                    <button
-                      onClick={() => void copyMessage(m.id, m.content)}
-                      aria-label="Copy message"
-                      className="absolute -bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-[#161616] border border-[#262626] rounded p-1 text-[#888] hover:text-white"
-                    >
-                      {copiedId === m.id ? (
-                        <Check className="size-3" />
-                      ) : (
-                        <Copy className="size-3" />
-                      )}
-                    </button>
+                    <div className="absolute -bottom-2 right-2 flex gap-0.5">
+                      <button
+                        onClick={() => void speak(m)}
+                        aria-label={speaking?.id === m.id ? "Stop reading aloud" : "Read aloud"}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-[#161616] border border-[#262626] rounded p-1 text-[#888] hover:text-white"
+                      >
+                        {speaking?.id === m.id ? (
+                          speaking.loading ? (
+                            <Loader2 className="size-3 animate-spin" />
+                          ) : (
+                            <Volume2 className="size-3 text-white" />
+                          )
+                        ) : (
+                          <Volume2 className="size-3" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => void copyMessage(m.id, m.content)}
+                        aria-label="Copy message"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-[#161616] border border-[#262626] rounded p-1 text-[#888] hover:text-white"
+                      >
+                        {copiedId === m.id ? (
+                          <Check className="size-3" />
+                        ) : (
+                          <Copy className="size-3" />
+                        )}
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -588,46 +1089,172 @@ export default function AiView() {
           </div>
         )}
 
-        {/* input */}
+        {/* composer */}
         <div className="border-t border-[#141414] p-3">
           <div className="max-w-2xl mx-auto">
-            <div className="flex gap-2 items-end">
-              <div className="flex-1">
-                <Textarea
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void send();
-                    }
+            <div
+              className={`rounded-xl border bg-[#0a0a0a] transition-colors ${
+                dragging ? "border-white/60" : "border-[#1f1f1f] focus-within:border-[#333]"
+              }`}
+            >
+              {/* upload progress chips */}
+              {uploading.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+                  {uploading.map((u) => (
+                    <span
+                      key={u.key}
+                      className="inline-flex items-center gap-1.5 max-w-[220px] rounded-lg border border-[#262626] bg-[#111] px-2 py-1 text-[11.5px] text-[#ccc]"
+                    >
+                      <Loader2 className="size-3.5 shrink-0 animate-spin text-[#8a8a8a]" />
+                      <span className="truncate">{u.name}</span>
+                      <span className="shrink-0 text-[#666] font-mono">{u.pct}%</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* attached file chips */}
+              {attached.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+                  {attached.map((a) => (
+                    <AttChip
+                      key={a.id}
+                      att={a}
+                      onRemove={() => setAttached((list) => list.filter((x) => x.id !== a.id))}
+                    />
+                  ))}
+                </div>
+              )}
+
+              <Textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void send();
+                  }
+                }}
+                onPaste={onPaste}
+                placeholder={
+                  imageMode
+                    ? "Describe the image to create — or attach one to edit it…"
+                    : "Ask anything — attach files, paste images, or drop them here"
+                }
+                rows={2}
+                maxLength={8000}
+                aria-label="Message Memphis AI"
+                className="bg-transparent border-0 text-white placeholder:text-[#555] focus-visible:ring-0 min-h-0 resize-none pt-3"
+              />
+
+              {/* composer toolbar */}
+              <div className="flex items-center gap-1.5 px-2.5 pb-2.5 pt-1">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files?.length) void uploadFiles(e.target.files);
+                    e.target.value = "";
                   }}
-                  placeholder="Ask anything — Shift+Enter for a new line"
-                  rows={2}
-                  maxLength={8000}
-                  aria-label="Message Memphis AI"
-                  className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] focus-visible:ring-white/30 min-h-0 resize-none"
                 />
-                <div className="flex items-center justify-between mt-1.5">
-                  <span className="text-[11px] text-[#555]">
-                    {sending ? (
-                      <span className="inline-flex items-center gap-1">
-                        <Loader2 className="size-3 animate-spin" /> GLM is writing…
-                      </span>
-                    ) : (
-                      "Enter to send · Shift+Enter for newline"
-                    )}
-                  </span>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={attached.length + uploading.length >= MAX_ATTACH}
+                  aria-label="Attach files"
+                  title="Attach files — any type"
+                  className="p-2 rounded-lg text-[#999] hover:text-white hover:bg-[#161616] disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+                >
+                  <Paperclip className="size-4" />
+                </button>
+
+                <button
+                  onClick={() => {
+                    setWebSearch((v) => !v);
+                    if (imageMode) setImageMode(false);
+                  }}
+                  aria-pressed={webSearch}
+                  title="Search the web and cite sources"
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] border transition-colors ${
+                    webSearch
+                      ? "bg-white text-black border-white"
+                      : "border-[#262626] text-[#999] hover:text-white hover:bg-[#161616]"
+                  }`}
+                >
+                  <Globe className="size-3.5" /> Web
+                </button>
+
+                <button
+                  onClick={() => {
+                    setImageMode((v) => !v);
+                    if (webSearch) setWebSearch(false);
+                  }}
+                  aria-pressed={imageMode}
+                  title="Create or edit images"
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] border transition-colors ${
+                    imageMode
+                      ? "bg-white text-black border-white"
+                      : "border-[#262626] text-[#999] hover:text-white hover:bg-[#161616]"
+                  }`}
+                >
+                  <Palette className="size-3.5" /> Image
+                </button>
+
+                <div className="ml-auto flex items-center gap-1.5">
+                  {recording && (
+                    <span className="inline-flex items-center gap-1.5 text-[12px] text-red-400 font-mono">
+                      <span className="size-2 rounded-full bg-red-500 animate-pulse" />
+                      {String(Math.floor(recordSecs / 60)).padStart(2, "0")}:
+                      {String(recordSecs % 60).padStart(2, "0")}
+                    </span>
+                  )}
+                  {transcribing && (
+                    <span className="inline-flex items-center gap-1 text-[11px] text-[#888]">
+                      <Loader2 className="size-3 animate-spin" /> transcribing…
+                    </span>
+                  )}
+                  <button
+                    onClick={() => (recording ? void stopRecording() : void startRecording())}
+                    aria-label={recording ? "Stop recording" : "Record voice message"}
+                    title={recording ? "Stop & transcribe" : "Voice input"}
+                    className={`p-2 rounded-lg transition-colors ${
+                      recording
+                        ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                        : "text-[#999] hover:text-white hover:bg-[#161616]"
+                    }`}
+                  >
+                    {recording ? <Square className="size-4" /> : <Mic className="size-4" />}
+                  </button>
+                  <Button
+                    onClick={() => void send()}
+                    disabled={(!input.trim() && !attached.length) || sending || uploading.length > 0}
+                    className="bg-white text-black hover:bg-[#e0e0e0] size-9 p-0 rounded-lg"
+                    aria-label="Send message"
+                  >
+                    {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                  </Button>
                 </div>
               </div>
-              <Button
-                onClick={() => void send()}
-                disabled={!input.trim() || sending}
-                className="bg-white text-black hover:bg-[#e0e0e0] self-start"
-                aria-label="Send message"
-              >
-                <Send className="size-4" />
-              </Button>
+            </div>
+
+            <div className="flex items-center justify-between mt-1.5 px-1">
+              <span className="text-[11px] text-[#555]">
+                {uploading.length > 0
+                  ? "Uploading & reading your files…"
+                  : sending
+                    ? busyLabel === "thinking"
+                      ? "GLM is thinking…"
+                      : busyLabel
+                        ? `${busyLabel}`
+                        : "GLM is writing…"
+                    : "Enter to send · Shift+Enter for newline"}
+              </span>
+              {attached.length > 0 && (
+                <span className="text-[11px] text-[#666]">
+                  {attached.length}/{MAX_ATTACH} files
+                </span>
+              )}
             </div>
 
             {/* custom instructions editor */}

@@ -1,0 +1,755 @@
+     1→"use client";
+     2→
+     3→/* ============================================================
+     4→   Memphis AI — a real chat backed by GLM (via z-ai-web-dev-sdk
+     5→   on the server). Free, no sign-in, no token limits. Streams
+     6→   token-by-token over SSE and renders markdown.
+     7→   ============================================================ */
+     8→
+     9→import { useCallback, useEffect, useRef, useState } from "react";
+    10→import ReactMarkdown from "react-markdown";
+    11→import remarkGfm from "remark-gfm";
+    12→import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+    13→import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+    14→import { aiSessionId, lsGet, lsSet } from "@/lib/store";
+    15→import { Button } from "@/components/ui/button";
+    16→import { Textarea } from "@/components/ui/textarea";
+    17→import {
+    18→  Dialog,
+    19→  DialogContent,
+    20→  DialogDescription,
+    21→  DialogHeader,
+    22→  DialogTitle,
+    23→} from "@/components/ui/dialog";
+    24→import {
+    25→  Sparkles,
+    26→  Plus,
+    27→  Send,
+    28→  Trash2,
+    29→  Layers,
+    30→  Save,
+    31→  ChevronLeft,
+    32→  ChevronRight,
+    33→  RotateCcw,
+    34→  MessagesSquare,
+    35→  Copy,
+    36→  Check,
+    37→  Infinity as InfinityIcon,
+    38→  Menu,
+    39→  Loader2,
+    40→} from "lucide-react";
+    41→
+    42→interface AIMsg {
+    43→  id: string;
+    44→  role: string;
+    45→  content: string;
+    46→  streaming?: boolean;
+    47→}
+    48→
+    49→interface ConversationRow {
+    50→  id: string;
+    51→  title: string;
+    52→  instructions: string;
+    53→  updatedAt: string;
+    54→  _count?: { messages: number };
+    55→}
+    56→
+    57→interface Flashcard {
+    58→  front: string;
+    59→  back: string;
+    60→}
+    61→
+    62→const FLASHCARD_KEY = "memphis-flashcards";
+    63→
+    64→/* ---------------- markdown renderer ---------------- */
+    65→
+    66→function Md({ text }: { text: string }) {
+    67→  return (
+    68→    <div className="memphis-md text-[13.5px] leading-relaxed break-words">
+    69→      <ReactMarkdown
+    70→        remarkPlugins={[remarkGfm]}
+    71→        components={{
+    72→          code(props) {
+    73→            const { className, children } = props;
+    74→            const match = /language-(\w+)/.exec(className || "");
+    75→            const code = String(children ?? "").replace(/\n$/, "");
+    76→            if (!match && !code.includes("\n")) {
+    77→              return (
+    78→                <code className="bg-[#161616] border border-[#262626] rounded px-1 py-0.5 text-[12px] font-mono">
+    79→                  {code}
+    80→                </code>
+    81→              );
+    82→            }
+    83→            return (
+    84→              <code className={className}>
+    85→                <SyntaxHighlighter
+    86→                  style={oneDark as Record<string, Record<string, string>>}
+    87→                  language={match ? match[1] : "text"}
+    88→                  PreTag="div"
+    89→                  customStyle={{
+    90→                    borderRadius: "10px",
+    91→                    border: "1px solid #1f1f1f",
+    92→                    fontSize: "12px",
+    93→                    margin: "8px 0",
+    94→                    background: "#0a0a0a",
+    95→                  }}
+    96→                >
+    97→                  {code}
+    98→                </SyntaxHighlighter>
+    99→              </code>
+   100→            );
+   101→          },
+   102→          a(props) {
+   103→            const { href, children } = props;
+   104→            return (
+   105→              <a href={href} target="_blank" rel="noreferrer noopener" className="u-link text-white underline underline-offset-2">
+   106→                {children}
+   107→              </a>
+   108→            );
+   109→          },
+   110→        }}
+   111→      >
+   112→        {text}
+   113→      </ReactMarkdown>
+   114→    </div>
+   115→  );
+   116→}
+   117→
+   118→/* ---------------- main view ---------------- */
+   119→
+   120→export default function AiView() {
+   121→  const [conversations, setConversations] = useState<ConversationRow[]>([]);
+   122→  const [activeId, setActiveId] = useState<string | null>(null);
+   123→  const [messages, setMessages] = useState<AIMsg[]>([]);
+   124→  const [instructions, setInstructions] = useState("");
+   125→  const [instructionsDraft, setInstructionsDraft] = useState("");
+   126→  const [input, setInput] = useState("");
+   127→  const [sending, setSending] = useState(false);
+   128→  const [error, setError] = useState("");
+   129→  const [cards, setCards] = useState<Flashcard[]>([]);
+   130→  const [cardIdx, setCardIdx] = useState(0);
+   131→  const [cardFlipped, setCardFlipped] = useState(false);
+   132→  const [genCards, setGenCards] = useState(false);
+   133→  const [showCards, setShowCards] = useState(false);
+   134→  const [savingInstructions, setSavingInstructions] = useState(false);
+   135→  const [sidebarOpen, setSidebarOpen] = useState(false);
+   136→  const [copiedId, setCopiedId] = useState<string | null>(null);
+   137→  const bottomRef = useRef<HTMLDivElement>(null);
+   138→  const abortRef = useRef<AbortController | null>(null);
+   139→  /* while a reply is streaming, the `meta` event flips activeId to the
+   140→     (possibly new) conversation id — the history-refetch effect must NOT
+   141→     run then, or it replaces the streamed placeholder with the server's
+   142→     pre-reply history and the visible reply vanishes */
+   143→  const sendingRef = useRef(false);
+   144→
+   145→  /* ---------- conversation list ---------- */
+   146→  const loadConversations = useCallback(async () => {
+   147→    const sid = aiSessionId();
+   148→    if (!sid) return;
+   149→    const r = await fetch(`/api/ai/conversations?sessionId=${encodeURIComponent(sid)}`);
+   150→    if (r.ok) {
+   151→      const data = (await r.json()) as { conversations?: ConversationRow[] };
+   152→      setConversations(data.conversations ?? []);
+   153→    }
+   154→  }, []);
+   155→
+   156→  useEffect(() => {
+   157→    void loadConversations();
+   158→    setCards(lsGet<Flashcard[]>(FLASHCARD_KEY, []));
+   159→  }, [loadConversations]);
+   160→
+   161→  /* ---------- load messages for active conversation ---------- */
+   162→  useEffect(() => {
+   163→    if (!activeId) return;
+   164→    if (sendingRef.current) return; /* streaming — keep the live UI */
+   165→    const sid = aiSessionId();
+   166→    void (async () => {
+   167→      const r = await fetch(
+   168→        `/api/ai/conversations/${activeId}?sessionId=${encodeURIComponent(sid)}`
+   169→      );
+   170→      if (r.ok) {
+   171→        const data = (await r.json()) as {
+   172→          conversation?: ConversationRow;
+   173→          messages?: AIMsg[];
+   174→        };
+   175→        if (data.conversation) {
+   176→          setMessages(data.messages ?? []);
+   177→          setInstructions(data.conversation.instructions ?? "");
+   178→          setInstructionsDraft(data.conversation.instructions ?? "");
+   179→        }
+   180→      }
+   181→    })();
+   182→  }, [activeId]);
+   183→
+   184→  useEffect(() => {
+   185→    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+   186→  }, [messages, sending]);
+   187→
+   188→  /* ---------- actions ---------- */
+   189→  const newChat = () => {
+   190→    if (sending) abortRef.current?.abort();
+   191→    setActiveId(null);
+   192→    setMessages([]);
+   193→    setInstructions("");
+   194→    setInstructionsDraft("");
+   195→    setError("");
+   196→    setSidebarOpen(false);
+   197→  };
+   198→
+   199→  const send = async () => {
+   200→    const text = input.trim();
+   201→    if (!text || sending) return;
+   202→    const sid = aiSessionId();
+   203→    if (!sid) return;
+   204→    setError("");
+   205→    setInput("");
+   206→    setSending(true);
+   207→
+   208→    const userMsg: AIMsg = { id: "local-" + Date.now(), role: "user", content: text };
+   209→    const streamMsg: AIMsg = { id: "stream", role: "assistant", content: "", streaming: true };
+   210→    setMessages((m) => [...m, userMsg, streamMsg]);
+   211→    sendingRef.current = true;
+   212→
+   213→    const controller = new AbortController();
+   214→    abortRef.current = controller;
+   215→
+   216→    try {
+   217→      const res = await fetch("/api/ai/chat", {
+   218→        method: "POST",
+   219→        headers: { "content-type": "application/json" },
+   220→        body: JSON.stringify({
+   221→          sessionId: sid,
+   222→          conversationId: activeId,
+   223→          message: text,
+   224→          instructions: instructionsDraft,
+   225→        }),
+   226→        signal: controller.signal,
+   227→      });
+   228→
+   229→      if (!res.ok || !res.body) {
+   230→        const data = (await res.json().catch(() => ({}))) as { error?: string };
+   231→        throw new Error(data.error || `Request failed (${res.status})`);
+   232→      }
+   233→
+   234→      const reader = res.body.getReader();
+   235→      const decoder = new TextDecoder();
+   236→      let buffer = "";
+   237→      let acc = "";
+   238→
+   239→      for (;;) {
+   240→        const { done, value } = await reader.read();
+   241→        if (done) break;
+   242→        buffer += decoder.decode(value, { stream: true });
+   243→        const blocks = buffer.split("\n\n");
+   244→        buffer = blocks.pop() ?? "";
+   245→        for (const block of blocks) {
+   246→          const evLine = block.split("\n").find((l) => l.startsWith("event: "));
+   247→          const dataLine = block.split("\n").find((l) => l.startsWith("data: "));
+   248→          if (!evLine || !dataLine) continue;
+   249→          const event = evLine.slice(7).trim();
+   250→          let payload: Record<string, unknown> = {};
+   251→          try {
+   252→            payload = JSON.parse(dataLine.slice(6));
+   253→          } catch {
+   254→            continue;
+   255→          }
+   256→          if (event === "meta" && typeof payload.conversationId === "string") {
+   257→            setActiveId(payload.conversationId);
+   258→          } else if (event === "delta" && typeof payload.text === "string") {
+   259→            acc += payload.text;
+   260→            setMessages((m) =>
+   261→              m.map((msg) => (msg.id === "stream" ? { ...msg, content: acc } : msg))
+   262→            );
+   263→          } else if (event === "error") {
+   264→            throw new Error(String(payload.message || "The model is unavailable."));
+   265→          } else if (event === "done") {
+   266→            setMessages((m) =>
+   267→              m.map((msg) =>
+   268→                msg.id === "stream"
+   269→                  ? {
+   270→                      id: String(payload.messageId ?? "saved"),
+   271→                      role: "assistant",
+   272→                      content: acc,
+   273→                    }
+   274→                  : msg
+   275→              )
+   276→            );
+   277→          }
+   278→        }
+   279→      }
+   280→      void loadConversations();
+   281→    } catch (e) {
+   282→      const msg = e instanceof Error ? e.message : String(e);
+   283→      if (msg !== "The user aborted a request." && !msg.toLowerCase().includes("abort")) {
+   284→        setError(msg);
+   285→      }
+   286→      setMessages((m) =>
+   287→        m
+   288→          /* rename any orphaned stream placeholder so the next send
+   289→             can't produce a duplicate React key */
+   290→          .map((x) => (x.id === "stream" ? { ...x, id: "aborted-" + Date.now(), streaming: false } : x))
+   291→          .filter((x) => x.role === "user" || x.content)
+   292→      );
+   293→    } finally {
+   294→      sendingRef.current = false;
+   295→      setSending(false);
+   296→      abortRef.current = null;
+   297→    }
+   298→  };
+   299→
+   300→  const saveInstructions = async () => {
+   301→    if (!activeId) {
+   302→      setInstructions(instructionsDraft);
+   303→      return;
+   304→    }
+   305→    setSavingInstructions(true);
+   306→    try {
+   307→      const r = await fetch(
+   308→        `/api/ai/conversations/${activeId}?sessionId=${encodeURIComponent(aiSessionId())}`,
+   309→        {
+   310→          method: "PATCH",
+   311→          headers: { "content-type": "application/json" },
+   312→          body: JSON.stringify({ instructions: instructionsDraft }),
+   313→        }
+   314→      );
+   315→      if (!r.ok) {
+   316→        const data = (await r.json().catch(() => ({}))) as { error?: string };
+   317→        setError(data.error || "Could not save instructions.");
+   318→        return;
+   319→      }
+   320→      setInstructions(instructionsDraft);
+   321→    } catch {
+   322→      setError("Could not save instructions — check your connection.");
+   323→    } finally {
+   324→      setSavingInstructions(false);
+   325→    }
+   326→  };
+   327→
+   328→  const deleteConversation = async (id: string) => {
+   329→    try {
+   330→      await fetch(
+   331→        `/api/ai/conversations/${id}?sessionId=${encodeURIComponent(aiSessionId())}`,
+   332→        { method: "DELETE" }
+   333→      );
+   334→    } catch { /* offline — keep the row; next reload re-syncs */ }
+   335→    if (activeId === id) newChat();
+   336→    void loadConversations();
+   337→  };
+   338→
+   339→  const generateFlashcards = async () => {
+   340→    if (genCards) return;
+   341→    if (!messages.length) {
+   342→      setError("Chat about a topic first, then build flashcards from it.");
+   343→      return;
+   344→    }
+   345→    setGenCards(true);
+   346→    setError("");
+   347→    try {
+   348→      const r = await fetch("/api/ai/flashcards", {
+   349→        method: "POST",
+   350→        headers: { "content-type": "application/json" },
+   351→        body: JSON.stringify({ sessionId: aiSessionId(), conversationId: activeId }),
+   352→      });
+   353→      const data = (await r.json().catch(() => ({}))) as { cards?: Flashcard[]; error?: string };
+   354→      if (r.ok && data.cards?.length) {
+   355→        const next = [...data.cards, ...cards].slice(0, 120);
+   356→        setCards(next);
+   357→        lsSet(FLASHCARD_KEY, next);
+   358→        setCardIdx(0);
+   359→        setCardFlipped(false);
+   360→        setShowCards(true);
+   361→      } else {
+   362→        setError(data.error || "Could not build flashcards — try again.");
+   363→      }
+   364→    } catch {
+   365→      setError("Could not build flashcards — check your connection.");
+   366→    } finally {
+   367→      setGenCards(false);
+   368→    }
+   369→  };
+   370→
+   371→  const copyMessage = async (id: string, content: string) => {
+   372→    try {
+   373→      await navigator.clipboard.writeText(content);
+   374→      setCopiedId(id);
+   375→      setTimeout(() => setCopiedId(null), 1500);
+   376→    } catch {
+   377→      /* clipboard unavailable */
+   378→    }
+   379→  };
+   380→
+   381→  /* ---------- render ---------- */
+   382→  const card = cards[cardIdx];
+   383→
+   384→  return (
+   385→    <div className="flex-1 flex min-h-0 relative">
+   386→      {/* sidebar */}
+   387→      <aside
+   388→        className={`${sidebarOpen ? "flex" : "hidden"} md:flex absolute md:relative inset-0 md:inset-auto z-30 md:z-auto bg-black/95 md:bg-transparent flex-col w-64 md:w-60 shrink-0 border-r border-[#141414]`}
+   389→      >
+   390→        <div className="p-3 border-b border-[#141414] flex gap-2">
+   391→          <Button
+   392→            onClick={newChat}
+   393→            className="flex-1 bg-white text-black hover:bg-[#e0e0e0]"
+   394→            size="sm"
+   395→          >
+   396→            <Plus className="size-4 mr-1" /> New chat
+   397→          </Button>
+   398→          <Button
+   399→            variant="outline"
+   400→            size="icon"
+   401→            className="md:hidden border-[#2a2a2a] text-white"
+   402→            onClick={() => setSidebarOpen(false)}
+   403→            aria-label="Close conversation list"
+   404→          >
+   405→            <ChevronRight className="size-4" />
+   406→          </Button>
+   407→        </div>
+   408→        <div className="flex-1 overflow-y-auto p-2 memphis-scroll">
+   409→          <p className="mono-label px-2 py-1">Your chats</p>
+   410→          {conversations.length === 0 && (
+   411→            <p className="text-[12px] text-[#555] px-2 py-2">
+   412→              Your conversations appear here — saved on this Memphis server for your browser
+   413→              session.
+   414→            </p>
+   415→          )}
+   416→          {conversations.map((c) => (
+   417→            <div key={c.id} className="group flex items-center">
+   418→              <button
+   419→                onClick={() => {
+   420→                  setActiveId(c.id);
+   421→                  setSidebarOpen(false);
+   422→                }}
+   423→                className={`flex-1 text-left px-2 py-1.5 rounded-md text-[13px] truncate transition-colors ${
+   424→                  activeId === c.id
+   425→                    ? "bg-[#141414] text-white"
+   426→                    : "text-[#9a9a9a] hover:bg-[#0d0d0d] hover:text-white"
+   427→                }`}
+   428→              >
+   429→                {c.title}
+   430→              </button>
+   431→              <button
+   432→                onClick={() => void deleteConversation(c.id)}
+   433→                aria-label={`Delete ${c.title}`}
+   434→                className="opacity-0 group-hover:opacity-100 p-1.5 text-[#666] hover:text-white"
+   435→              >
+   436→                <Trash2 className="size-3.5" />
+   437→              </button>
+   438→            </div>
+   439→          ))}
+   440→        </div>
+   441→        <div className="p-3 border-t border-[#141414] flex items-center gap-1.5 text-[11px] text-[#777]">
+   442→          <InfinityIcon className="size-3.5" />
+   443→          GLM · free · unlimited
+   444→        </div>
+   445→      </aside>
+   446→
+   447→      {/* main */}
+   448→      <div className="flex-1 flex flex-col min-w-0">
+   449→        <div className="border-b border-[#141414] px-4 py-2.5 flex items-center gap-2">
+   450→          <Button
+   451→            variant="ghost"
+   452→            size="icon"
+   453→            className="md:hidden text-white size-8"
+   454→            onClick={() => setSidebarOpen(true)}
+   455→            aria-label="Open conversation list"
+   456→          >
+   457→            <Menu className="size-4" />
+   458→          </Button>
+   459→          <Sparkles className="size-4 text-white" />
+   460→          <h1 className="text-sm font-semibold text-white">Memphis AI</h1>
+   461→          <span className="text-[11px] text-[#555] hidden sm:inline">
+   462→            powered by GLM
+   463→          </span>
+   464→          <div className="ml-auto flex items-center gap-2">
+   465→            <Button
+   466→              variant="outline"
+   467→              size="sm"
+   468→              onClick={() => void generateFlashcards()}
+   469→              disabled={genCards}
+   470→              className="border-[#2a2a2a] text-white hover:bg-[#101010]"
+   471→            >
+   472→              <Layers className="size-4 mr-1" />
+   473→              {genCards ? "Building…" : "Flashcards"}
+   474→            </Button>
+   475→            {cards.length > 0 && (
+   476→              <Button
+   477→                variant="ghost"
+   478→                size="sm"
+   479→                onClick={() => {
+   480→                  setCardIdx(0);
+   481→                  setCardFlipped(false);
+   482→                  setShowCards(true);
+   483→                }}
+   484→                className="text-[#9a9a9a] hover:text-white"
+   485→              >
+   486→                Study ({cards.length})
+   487→              </Button>
+   488→            )}
+   489→          </div>
+   490→        </div>
+   491→
+   492→        {/* messages */}
+   493→        <div className="flex-1 overflow-y-auto memphis-scroll">
+   494→          <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+   495→            {messages.length === 0 && !sending && (
+   496→              <div className="text-center py-12">
+   497→                <Sparkles className="size-7 mx-auto text-[#555] mb-3" />
+   498→                <h2 className="text-lg text-white font-semibold">How can I help today?</h2>
+   499→                <p className="text-[13px] text-[#777] mt-2">
+   500→                  A real AI chat running on GLM — free, unlimited, no account needed.
+   501→                  Ask anything.
+   502→                </p>
+   503→                <div className="mt-6 grid sm:grid-cols-2 gap-2 text-left">
+   504→                  {[
+   505→                    "Explain how a scramjet engine works",
+   506→                    "Write a Python script to rename my files",
+   507→                    "Help me draft a message to my teacher",
+   508→                    "Give me a 20-minute full-body workout plan",
+   509→                  ].map((s) => (
+   510→                    <button
+   511→                      key={s}
+   512→                      onClick={() => setInput(s)}
+   513→                      className="text-[13px] text-[#c9c9c9] border border-[#1a1a1a] bg-[#080808] rounded-lg p-3 hover:border-[#3a3a3a] hover:bg-[#0d0d0d] transition-colors"
+   514→                    >
+   515→                      {s}
+   516→                    </button>
+   517→                  ))}
+   518→                </div>
+   519→              </div>
+   520→            )}
+   521→            {messages.map((m) => (
+   522→              <div
+   523→                key={m.id}
+   524→                className={m.role === "user" ? "flex justify-end" : "flex"}
+   525→              >
+   526→                <div
+   527→                  className={`group relative max-w-[88%] rounded-xl px-3.5 py-2.5 ${
+   528→                    m.role === "user"
+   529→                      ? "bg-white text-black"
+   530→                      : "bg-[#0d0d0d] text-[#dcdcdc] border border-[#1a1a1a]"
+   531→                  }`}
+   532→                >
+   533→                  {m.role === "user" ? (
+   534→                    <p className="text-[13.5px] leading-relaxed whitespace-pre-wrap break-words">
+   535→                      {m.content}
+   536→                    </p>
+   537→                  ) : m.content ? (
+   538→                    <Md text={m.content} />
+   539→                  ) : (
+   540→                    <span className="flex items-center gap-1.5 text-[13px] text-[#777]">
+   541→                      <span className="boot-pulse">thinking</span>
+   542→                      <span className="flex gap-0.5">
+   543→                        {[0, 1, 2].map((i) => (
+   544→                          <span
+   545→                            key={i}
+   546→                            className="size-1 rounded-full bg-[#777]"
+   547→                            style={{ animation: `blink 1.2s ${i * 0.2}s infinite` }}
+   548→                          />
+   549→                        ))}
+   550→                      </span>
+   551→                    </span>
+   552→                  )}
+   553→                  {m.role === "assistant" && m.content && !m.streaming && (
+   554→                    <button
+   555→                      onClick={() => void copyMessage(m.id, m.content)}
+   556→                      aria-label="Copy message"
+   557→                      className="absolute -bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-[#161616] border border-[#262626] rounded p-1 text-[#888] hover:text-white"
+   558→                    >
+   559→                      {copiedId === m.id ? (
+   560→                        <Check className="size-3" />
+   561→                      ) : (
+   562→                        <Copy className="size-3" />
+   563→                      )}
+   564→                    </button>
+   565→                  )}
+   566→                </div>
+   567→              </div>
+   568→            ))}
+   569→            <div ref={bottomRef} />
+   570→          </div>
+   571→        </div>
+   572→
+   573→        {/* custom instructions */}
+   574→        {instructions && (
+   575→          <div className="px-4 py-2 border-t border-[#141414] bg-[#050505]">
+   576→            <p className="text-[11px] text-[#666]">
+   577→              <span className="font-mono uppercase tracking-wider">custom instructions:</span>{" "}
+   578→              {instructions}
+   579→            </p>
+   580→          </div>
+   581→        )}
+   582→
+   583→        {error && (
+   584→          <div className="px-4 py-2 border-t border-[#141414]">
+   585→            <p className="text-[12px] text-white bg-[#161616] border border-[#333] rounded px-2.5 py-1.5">
+   586→              {error}
+   587→            </p>
+   588→          </div>
+   589→        )}
+   590→
+   591→        {/* input */}
+   592→        <div className="border-t border-[#141414] p-3">
+   593→          <div className="max-w-2xl mx-auto">
+   594→            <div className="flex gap-2 items-end">
+   595→              <div className="flex-1">
+   596→                <Textarea
+   597→                  value={input}
+   598→                  onChange={(e) => setInput(e.target.value)}
+   599→                  onKeyDown={(e) => {
+   600→                    if (e.key === "Enter" && !e.shiftKey) {
+   601→                      e.preventDefault();
+   602→                      void send();
+   603→                    }
+   604→                  }}
+   605→                  placeholder="Ask anything — Shift+Enter for a new line"
+   606→                  rows={2}
+   607→                  maxLength={8000}
+   608→                  aria-label="Message Memphis AI"
+   609→                  className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] focus-visible:ring-white/30 min-h-0 resize-none"
+   610→                />
+   611→                <div className="flex items-center justify-between mt-1.5">
+   612→                  <span className="text-[11px] text-[#555]">
+   613→                    {sending ? (
+   614→                      <span className="inline-flex items-center gap-1">
+   615→                        <Loader2 className="size-3 animate-spin" /> GLM is writing…
+   616→                      </span>
+   617→                    ) : (
+   618→                      "Enter to send · Shift+Enter for newline"
+   619→                    )}
+   620→                  </span>
+   621→                </div>
+   622→              </div>
+   623→              <Button
+   624→                onClick={() => void send()}
+   625→                disabled={!input.trim() || sending}
+   626→                className="bg-white text-black hover:bg-[#e0e0e0] self-start"
+   627→                aria-label="Send message"
+   628→              >
+   629→                <Send className="size-4" />
+   630→              </Button>
+   631→            </div>
+   632→
+   633→            {/* custom instructions editor */}
+   634→            <details className="mt-2 group">
+   635→              <summary className="text-[12px] text-[#777] hover:text-white cursor-pointer select-none flex items-center gap-1.5">
+   636→                <MessagesSquare className="size-3.5" /> Custom instructions
+   637→              </summary>
+   638→              <div className="mt-2 flex gap-2">
+   639→                <Textarea
+   640→                  value={instructionsDraft}
+   641→                  onChange={(e) => setInstructionsDraft(e.target.value)}
+   642→                  placeholder="e.g. Answer in Spanish. I'm a beginner coder — explain like I'm new."
+   643→                  rows={2}
+   644→                  maxLength={1000}
+   645→                  className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] text-[12px] focus-visible:ring-white/30 min-h-0"
+   646→                />
+   647→                <Button
+   648→                  size="sm"
+   649→                  variant="outline"
+   650→                  onClick={() => void saveInstructions()}
+   651→                  disabled={savingInstructions}
+   652→                  className="border-[#2a2a2a] text-white hover:bg-[#101010] self-start"
+   653→                >
+   654→                  <Save className="size-3.5" /> {savingInstructions ? "…" : "Save"}
+   655→                </Button>
+   656→              </div>
+   657→            </details>
+   658→          </div>
+   659→        </div>
+   660→      </div>
+   661→
+   662→      {/* flashcards modal */}
+   663→      <Dialog open={showCards} onOpenChange={setShowCards}>
+   664→        <DialogContent className="bg-[#050505] border-[#1f1f1f] text-white max-w-md">
+   665→          <DialogHeader>
+   666→            <DialogTitle className="flex items-center gap-2 text-base">
+   667→              <Layers className="size-4" /> Flashcards
+   668→            </DialogTitle>
+   669→            <DialogDescription className="text-xs text-[#7a7a7a]">
+   670→              Click the card to flip. {cards.length} card{cards.length === 1 ? "" : "s"} saved
+   671→              on this device.
+   672→            </DialogDescription>
+   673→          </DialogHeader>
+   674→          {card ? (
+   675→            <>
+   676→              <button
+   677→                onClick={() => setCardFlipped((f) => !f)}
+   678→                className="w-full min-h-44 rounded-lg border border-[#222] bg-[#0a0a0a] p-6 text-center hover:border-[#444] transition-colors"
+   679→                aria-label={cardFlipped ? "Show question" : "Show answer"}
+   680→              >
+   681→                <p className="text-[11px] font-mono uppercase tracking-wider text-[#555] mb-2">
+   682→                  {cardFlipped ? "answer" : "question"}
+   683→                </p>
+   684→                <p className="text-[15px] text-white leading-relaxed">
+   685→                  {cardFlipped ? card.back : card.front}
+   686→                </p>
+   687→              </button>
+   688→              <div className="flex items-center justify-between">
+   689→                <Button
+   690→                  variant="ghost"
+   691→                  size="sm"
+   692→                  onClick={() => {
+   693→                    setCardIdx((i) => (i - 1 + cards.length) % cards.length);
+   694→                    setCardFlipped(false);
+   695→                  }}
+   696→                  className="text-[#9a9a9a] hover:text-white"
+   697→                >
+   698→                  <ChevronLeft className="size-4" />
+   699→                </Button>
+   700→                <span className="text-[12px] text-[#777] font-mono">
+   701→                  {cardIdx + 1} / {cards.length}
+   702→                </span>
+   703→                <div className="flex gap-1">
+   704→                  <Button
+   705→                    variant="ghost"
+   706→                    size="sm"
+   707→                    aria-label="Restart deck"
+   708→                    onClick={() => {
+   709→                      setCardIdx(0);
+   710→                      setCardFlipped(false);
+   711→                    }}
+   712→                    className="text-[#9a9a9a] hover:text-white"
+   713→                  >
+   714→                    <RotateCcw className="size-4" />
+   715→                  </Button>
+   716→                  <Button
+   717→                    variant="ghost"
+   718→                    size="sm"
+   719→                    aria-label="Delete this card"
+   720→                    onClick={() => {
+   721→                      const next = cards.filter((_, i) => i !== cardIdx);
+   722→                      setCards(next);
+   723→                      lsSet(FLASHCARD_KEY, next);
+   724→                      setCardIdx((i) => Math.min(i, Math.max(0, next.length - 1)));
+   725→                      if (!next.length) setShowCards(false);
+   726→                    }}
+   727→                    className="text-[#9a9a9a] hover:text-white"
+   728→                  >
+   729→                    <Trash2 className="size-4" />
+   730→                  </Button>
+   731→                  <Button
+   732→                    variant="ghost"
+   733→                    size="sm"
+   734→                    onClick={() => {
+   735→                      setCardIdx((i) => (i + 1) % cards.length);
+   736→                      setCardFlipped(false);
+   737→                    }}
+   738→                    className="text-[#9a9a9a] hover:text-white"
+   739→                  >
+   740→                    <ChevronRight className="size-4" />
+   741→                  </Button>
+   742→                </div>
+   743→              </div>
+   744→            </>
+   745→          ) : (
+   746→            <p className="text-[13px] text-[#777] text-center py-6">
+   747→              No cards — generate some from a chat.
+   748→            </p>
+   749→          )}
+   750→        </DialogContent>
+   751→      </Dialog>
+   752→    </div>
+   753→  );
+   754→}
+   755→
