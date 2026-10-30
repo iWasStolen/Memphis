@@ -132,6 +132,7 @@ export function SettingsModal() {
       if (e.ctrlKey) parts.push("Ctrl");
       if (e.altKey) parts.push("Alt");
       if (e.shiftKey) parts.push("Shift");
+      if (e.metaKey) parts.push("Meta");
       let k = e.key;
       if (k === " ") k = "Space";
       if (/^[a-z]$/i.test(k)) k = k.toUpperCase();
@@ -315,7 +316,6 @@ export function SettingsModal() {
                           : "border-[#262626] text-[#9a9a9a] hover:text-white hover:border-[#3a3a3a]"
                       }`}
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={p.favicon}
                         alt=""
@@ -426,6 +426,12 @@ export function SettingsModal() {
                     )}
                   </div>
                 </Row>
+                <div className="py-2 text-[11px] text-[#666] leading-relaxed border-b border-[#141414]">
+                  Hotkeys with Ctrl, Alt or Meta (Cmd / Win) fire anywhere,
+                  even while you type. Plain keys without a modifier are
+                  ignored while you are typing in a text field, so they
+                  can&apos;t hijack your keyboard in chat and inputs.
+                </div>
                 <Row label="Panic URL" hint="Where the panic key sends you">
                   <div className="flex flex-col gap-2 items-end">
                     <div className="flex flex-wrap gap-1.5 justify-end">

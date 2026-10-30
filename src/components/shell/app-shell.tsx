@@ -205,6 +205,12 @@ export default function AppShell() {
     const needCtrl = combo.includes("Ctrl");
     const needAlt = combo.includes("Alt");
     const needShift = combo.includes("Shift");
+    const needMeta = combo.includes("Meta");
+    /* modifier combos (Ctrl/Alt/Meta + key) never type a character, so
+       they may fire anywhere. A plain single key must NOT hijack typing —
+       otherwise a panic key like "q" would warp you away the moment you
+       type that letter in chat, search or an input. */
+    const hasModifier = needCtrl || needAlt || needMeta;
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const typing =
@@ -217,7 +223,9 @@ export default function AppShell() {
         key === main &&
         e.ctrlKey === needCtrl &&
         e.altKey === needAlt &&
-        e.shiftKey === needShift
+        e.shiftKey === needShift &&
+        e.metaKey === needMeta &&
+        (!typing || hasModifier)
       ) {
         e.preventDefault();
         const url = /^https?:\/\//.test(settings.panicUrl)
@@ -225,7 +233,6 @@ export default function AppShell() {
           : "https://classroom.google.com/";
         window.location.replace(url);
       }
-      void typing;
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);

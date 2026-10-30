@@ -361,3 +361,25 @@ Stage Summary:
 
 Stage Summary:
 - Memphis AI now closes the file loop: it reads any file in AND composes any file out — real xlsx/docx/pptx/pdf plus every text/code/data format — with a live composing view, inline previews, and one-click downloads, all replay-safe, session-scoped, and verified in dev and production standalone.
+
+## Settings: full functional audit (2026-10-30, latest)
+
+- User request: "make sure everything in setting is 100% working and functional" — systematic audit of every control in the Settings modal (9 tabs), live-tested through :81 via agent-browser.
+- Verified PASS (live, each control clicked + effect observed in DOM/CSS/localStorage/URL):
+  * Appearance: mode (graphite → --background #0a0a0a), accent silver, bg grid (body::before opacity 1), font mono (Geist Mono), text size XL (html 18px), reduce-effects (data-reducefx=1) — all applied instantly AND persisted across reload.
+  * Tab: all 9 cloak presets (title + favicon swap), custom title/icon + "Apply custom cloak", auto-switch (visibilitychange simulated via document.hidden override: none→classroom on hide, restored on show).
+  * Window: Launch in about:blank opens a new tab whose document holds exactly one full-viewport iframe of the app, black bg, title preserved.
+  * Panic: hotkey capture (Ctrl+Shift+P and Meta+K), Clear, URL presets, custom URL, invalid-URL toast validation, real panic navigation end-to-end.
+  * Behavior: close protection (beforeunload listener proven via cancelable Event → defaultPrevented true when on, false when off), skip loading (no boot overlay after reload).
+  * Chat: FAB toggle (appears/disappears), FAB navigates to Chat and hides there.
+  * Browse: transport epoxy↔libcurl (persisted + toast + live setProxyTransport, proxy handle intact), search engine Google → address-bar placeholder + real query normalized to google.com/search through the scramjet iframe.
+  * Data: Reset settings (all defaults restored, DOM attributes re-applied live), Clear local data (every key wiped except memphis-token, page reloads clean).
+  * Links: all four legal modals (ToS/Privacy/DMCA/Credits) open with correct content.
+  * Mobile layout: 390px viewport → full-width modal, horizontally scrollable tab rail, 9 tabs.
+- BUG FOUND & FIXED — panic hotkey hijacking typing (app-shell.tsx):
+  * The keydown handler computed `typing` (INPUT/TEXTAREA/contentEditable) but discarded it (`void typing`), so a plain single-letter panic key (allowed by the capture UI) warped the page away the moment that letter was typed in ANY input — reproduced live: typing "q" in the panic URL field navigated to the panic URL mid-keystroke.
+  * Fix: fire only when `!typing || hasModifier` (Ctrl/Alt/Meta combos never type a character, so they stay instant everywhere); also require exact `e.metaKey === needMeta` so a plain-key hotkey no longer over-matches Cmd+key presses.
+  * Capture UI (settings-modal.tsx) now records Meta (⌘/Win) in the combo — previously silently dropped, leaving a hotkey that could never fire; added an inline tip explaining plain keys are ignored while typing.
+  * Re-verified all three scenarios live: plain key + typing → types normally (no navigation); plain key outside inputs → fires; Ctrl+Shift+P while focused in an input → fires. Meta+K capture + fire verified.
+- Cosmetic cleanup: removed an unused eslint-disable directive in settings-modal.tsx. (Clever cloak favicon 404s from this network — pre-existing external dependency; onError hides the img gracefully and the button still works.)
+- eslint 0 errors (warnings pre-existing), tsc clean, next build passes (19 routes).
