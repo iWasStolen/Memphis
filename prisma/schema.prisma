@@ -140,6 +140,8 @@ model AIMessage {
   role           String // user | assistant
   content        String
   attachments    Json? // [{ id, name, kind, size, mime }] — files tied to this message
+  reasoning      String? // private chain-of-thought streamed in Reasoning mode
+  mode           String? // "fast" | "reasoning" — the mode that produced this reply
   conversation   AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   createdAt      DateTime       @default(now())
 

@@ -1,0 +1,1382 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→/* ============================================================
+     4→     4→   Memphis AI — a real chat backed by GLM (via z-ai-web-dev-sdk
+     5→     5→   on the server). Free, no sign-in, no token limits. Streams
+     6→     6→   token-by-token over SSE and renders markdown.
+     7→     7→
+     8→     8→   Full toolbox:
+     9→     9→   - Attach ANY file (button / drag-drop / paste) — the server
+    10→    10→     extracts text, transcribes audio, describes images & video
+    11→    11→   - Live vision: attached images go straight to the vision model
+    12→    12→   - Web search toggle with cited sources
+    13→    13→   - Image mode: generate or edit pictures
+    14→    14→   - Voice input (mic → ASR) and read-aloud (TTS)
+    15→    15→   - Export the conversation as markdown
+    16→    16→   ============================================================ */
+    17→    17→
+    18→    18→import { useCallback, useEffect, useRef, useState } from "react";
+    19→    19→import ReactMarkdown from "react-markdown";
+    20→    20→import remarkGfm from "remark-gfm";
+    21→    21→import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+    22→    22→import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+    23→    23→import { aiSessionId, lsGet, lsSet } from "@/lib/store";
+    24→    24→import { Button } from "@/components/ui/button";
+    25→    25→import { Textarea } from "@/components/ui/textarea";
+    26→    26→import {
+    27→    27→  Dialog,
+    28→    28→  DialogContent,
+    29→    29→  DialogDescription,
+    30→    30→  DialogHeader,
+    31→    31→  DialogTitle,
+    32→    32→} from "@/components/ui/dialog";
+    33→    33→import {
+    34→    34→  Sparkles,
+    35→    35→  Plus,
+    36→    36→  Send,
+    37→    37→  Trash2,
+    38→    38→  Layers,
+    39→    39→  Save,
+    40→    40→  ChevronLeft,
+    41→    41→  ChevronRight,
+    42→    42→  RotateCcw,
+    43→    43→  MessagesSquare,
+    44→    44→  Copy,
+    45→    45→  Check,
+    46→    46→  Infinity as InfinityIcon,
+    47→    47→  Menu,
+    48→    48→  Loader2,
+    49→    49→  Paperclip,
+    50→    50→  Globe,
+    51→    51→  Palette,
+    52→    52→  Mic,
+    53→    53→  Square,
+    54→    54→  Download,
+    55→    55→  Volume2,
+    56→    56→  X,
+    57→    57→  FileText,
+    58→    58→  FileCode2,
+    59→    59→  FileArchive,
+    60→    60→  Film,
+    61→    61→  Table,
+    62→    62→  Presentation,
+    63→    63→  Braces,
+    64→    64→  File,
+    65→    65→  AudioLines,
+    66→    66→  Image as ImageIcon,
+    67→    67→} from "lucide-react";
+    68→    68→
+    69→    69→interface AttMeta {
+    70→    70→  id: string;
+    71→    71→  name: string;
+    72→    72→  kind: string;
+    73→    73→  size: number;
+    74→    74→  mime: string;
+    75→    75→}
+    76→    76→
+    77→    77→interface AIMsg {
+    78→    78→  id: string;
+    79→    79→  role: string;
+    80→    80→  content: string;
+    81→    81→  streaming?: boolean;
+    82→    82→  attachments?: AttMeta[] | null;
+    83→    83→}
+    84→    84→
+    85→    85→interface UploadingFile {
+    86→    86→  key: string;
+    87→    87→  name: string;
+    88→    88→  pct: number;
+    89→    89→}
+    90→    90→
+    91→    91→interface ConversationRow {
+    92→    92→  id: string;
+    93→    93→  title: string;
+    94→    94→  instructions: string;
+    95→    95→  updatedAt: string;
+    96→    96→  _count?: { messages: number };
+    97→    97→}
+    98→    98→
+    99→    99→interface Flashcard {
+   100→   100→  front: string;
+   101→   101→  back: string;
+   102→   102→}
+   103→   103→
+   104→   104→const FLASHCARD_KEY = "memphis-flashcards";
+   105→   105→const MAX_ATTACH = 6;
+   106→   106→
+   107→   107→const STATUS_LABEL: Record<string, string> = {
+   108→   108→  searching: "Searching the web…",
+   109→   109→  reading: "Reading sources…",
+   110→   110→  painting: "Painting your image…",
+   111→   111→  writing: "thinking",
+   112→   112→};
+   113→   113→
+   114→   114→function fmtSize(n: number): string {
+   115→   115→  return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+   116→   116→}
+   117→   117→
+   118→   118→function AttIcon({ kind, className }: { kind: string; className?: string }) {
+   119→   119→  if (kind === "image" || kind === "generated") return <ImageIcon className={className} />;
+   120→   120→  if (kind === "audio") return <AudioLines className={className} />;
+   121→   121→  if (kind === "video") return <Film className={className} />;
+   122→   122→  if (kind === "pdf" || kind === "word" || kind === "ebook") return <FileText className={className} />;
+   123→   123→  if (kind === "sheet") return <Table className={className} />;
+   124→   124→  if (kind === "slides") return <Presentation className={className} />;
+   125→   125→  if (kind === "archive") return <FileArchive className={className} />;
+   126→   126→  if (kind === "code") return <FileCode2 className={className} />;
+   127→   127→  if (kind === "data") return <Braces className={className} />;
+   128→   128→  return <File className={className} />;
+   129→   129→}
+   130→   130→
+   131→   131→/* split a message into TTS-sized chunks (API limit is 1024 chars) */
+   132→   132→function splitForTts(text: string, max = 950): string[] {
+   133→   133→  const clean = text
+   134→   134→    .replace(/```[\s\S]*?```/g, " — code block omitted — ")
+   135→   135→    .replace(/!\[[^\]]*\]\([^)]*\)/g, " — image — ");
+   136→   136→  const sentences = clean.match(/[^.!?\n]+[.!?]*\s*/g) ?? [clean];
+   137→   137→  const chunks: string[] = [];
+   138→   138→  let cur = "";
+   139→   139→  for (const s of sentences) {
+   140→   140→    if ((cur + s).length > max) {
+   141→   141→      if (cur.trim()) chunks.push(cur);
+   142→   142→      if (s.length > max) {
+   143→   143→        for (let i = 0; i < s.length; i += max) chunks.push(s.slice(i, i + max));
+   144→   144→        cur = "";
+   145→   145→      } else cur = s;
+   146→   146→    } else cur += s;
+   147→   147→  }
+   148→   148→  if (cur.trim()) chunks.push(cur);
+   149→   149→  return chunks;
+   150→   150→}
+   151→   151→
+   152→   152→/* 16 kHz mono PCM WAV encoder (for voice input) */
+   153→   153→function encodeWav(buffer: AudioBuffer, targetRate = 16000): ArrayBuffer {
+   154→   154→  const src = buffer.getChannelData(0);
+   155→   155→  const ratio = buffer.sampleRate / targetRate;
+   156→   156→  const length = Math.max(1, Math.floor(src.length / ratio));
+   157→   157→  const data = new Float32Array(length);
+   158→   158→  for (let i = 0; i < length; i++) {
+   159→   159→    const pos = i * ratio;
+   160→   160→    const i0 = Math.floor(pos);
+   161→   161→    const i1 = Math.min(i0 + 1, src.length - 1);
+   162→   162→    const frac = pos - i0;
+   163→   163→    data[i] = src[i0] * (1 - frac) + src[i1] * frac;
+   164→   164→  }
+   165→   165→  const out = new ArrayBuffer(44 + length * 2);
+   166→   166→  const view = new DataView(out);
+   167→   167→  const wstr = (off: number, s: string) => {
+   168→   168→    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+   169→   169→  };
+   170→   170→  wstr(0, "RIFF");
+   171→   171→  view.setUint32(4, 36 + length * 2, true);
+   172→   172→  wstr(8, "WAVE");
+   173→   173→  wstr(12, "fmt ");
+   174→   174→  view.setUint32(16, 16, true);
+   175→   175→  view.setUint16(20, 1, true);
+   176→   176→  view.setUint16(22, 1, true);
+   177→   177→  view.setUint32(24, targetRate, true);
+   178→   178→  view.setUint32(28, targetRate * 2, true);
+   179→   179→  view.setUint16(32, 2, true);
+   180→   180→  view.setUint16(34, 16, true);
+   181→   181→  wstr(36, "data");
+   182→   182→  view.setUint32(40, length * 2, true);
+   183→   183→  let off = 44;
+   184→   184→  for (let i = 0; i < length; i++, off += 2) {
+   185→   185→    const s = Math.max(-1, Math.min(1, data[i]));
+   186→   186→    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+   187→   187→  }
+   188→   188→  return out;
+   189→   189→}
+   190→   190→
+   191→   191→/* ---------------- markdown renderer ---------------- */
+   192→   192→
+   193→   193→function Md({ text }: { text: string }) {
+   194→   194→  return (
+   195→   195→    <div className="memphis-md text-[13.5px] leading-relaxed break-words">
+   196→   196→      <ReactMarkdown
+   197→   197→        remarkPlugins={[remarkGfm]}
+   198→   198→        components={{
+   199→   199→          code(props) {
+   200→   200→            const { className, children } = props;
+   201→   201→            const match = /language-(\w+)/.exec(className || "");
+   202→   202→            const code = String(children ?? "").replace(/\n$/, "");
+   203→   203→            if (!match && !code.includes("\n")) {
+   204→   204→              return (
+   205→   205→                <code className="bg-[#161616] border border-[#262626] rounded px-1 py-0.5 text-[12px] font-mono">
+   206→   206→                  {code}
+   207→   207→                </code>
+   208→   208→              );
+   209→   209→            }
+   210→   210→            return (
+   211→   211→              <code className={className}>
+   212→   212→                <SyntaxHighlighter
+   213→   213→                  style={oneDark as Record<string, Record<string, string>>}
+   214→   214→                  language={match ? match[1] : "text"}
+   215→   215→                  PreTag="div"
+   216→   216→                  customStyle={{
+   217→   217→                    borderRadius: "10px",
+   218→   218→                    border: "1px solid #1f1f1f",
+   219→   219→                    fontSize: "12px",
+   220→   220→                    margin: "8px 0",
+   221→   221→                    background: "#0a0a0a",
+   222→   222→                  }}
+   223→   223→                >
+   224→   224→                  {code}
+   225→   225→                </SyntaxHighlighter>
+   226→   226→              </code>
+   227→   227→            );
+   228→   228→          },
+   229→   229→          a(props) {
+   230→   230→            const { href, children } = props;
+   231→   231→            return (
+   232→   232→              <a href={href} target="_blank" rel="noreferrer noopener" className="u-link text-white underline underline-offset-2">
+   233→   233→                {children}
+   234→   234→              </a>
+   235→   235→            );
+   236→   236→          },
+   237→   237→          img(props) {
+   238→   238→            const { src, alt } = props;
+   239→   239→            if (!src || typeof src !== "string") return null;
+   240→   240→            return (
+   241→   241→              <img
+   242→   242→                src={src}
+   243→   243→                alt={alt ?? ""}
+   244→   244→                loading="lazy"
+   245→   245→                onClick={() => window.open(src, "_blank")}
+   246→   246→                className="max-w-full max-h-[420px] rounded-lg border border-[#222] my-2 cursor-zoom-in hover:border-[#444] transition-colors"
+   247→   247→              />
+   248→   248→            );
+   249→   249→          },
+   250→   250→        }}
+   251→   251→      >
+   252→   252→        {text}
+   253→   253→      </ReactMarkdown>
+   254→   254→    </div>
+   255→   255→  );
+   256→   256→}
+   257→   257→
+   258→   258→/* ---------------- attachment chip ---------------- */
+   259→   259→
+   260→   260→function AttChip({ att, onRemove }: { att: AttMeta; onRemove?: () => void }) {
+   261→   261→  const sid = aiSessionId();
+   262→   262→  return (
+   263→   263→    <span className="inline-flex items-center gap-1.5 max-w-[220px] rounded-lg border border-[#262626] bg-[#111] pl-2 pr-1 py-1 text-[11.5px] text-[#ccc]">
+   264→   264→      <a
+   265→   265→        href={`/api/ai/files/${att.id}/raw?sessionId=${encodeURIComponent(sid)}`}
+   266→   266→        target="_blank"
+   267→   267→        rel="noreferrer"
+   268→   268→        className="inline-flex items-center gap-1.5 min-w-0 hover:text-white"
+   269→   269→        title={`${att.name} · ${fmtSize(att.size)} — open`}
+   270→   270→      >
+   271→   271→        <AttIcon kind={att.kind} className="size-3.5 shrink-0 text-[#8a8a8a]" />
+   272→   272→        <span className="truncate">{att.name}</span>
+   273→   273→        <span className="shrink-0 text-[#555]">{fmtSize(att.size)}</span>
+   274→   274→      </a>
+   275→   275→      {onRemove && (
+   276→   276→        <button
+   277→   277→          onClick={onRemove}
+   278→   278→          aria-label={`Remove ${att.name}`}
+   279→   279→          className="shrink-0 p-0.5 rounded text-[#666] hover:text-white hover:bg-[#1d1d1d]"
+   280→   280→        >
+   281→   281→          <X className="size-3" />
+   282→   282→        </button>
+   283→   283→      )}
+   284→   284→    </span>
+   285→   285→  );
+   286→   286→}
+   287→   287→
+   288→   288→/* ---------------- main view ---------------- */
+   289→   289→
+   290→   290→export default function AiView() {
+   291→   291→  const [conversations, setConversations] = useState<ConversationRow[]>([]);
+   292→   292→  const [activeId, setActiveId] = useState<string | null>(null);
+   293→   293→  const [messages, setMessages] = useState<AIMsg[]>([]);
+   294→   294→  const [instructions, setInstructions] = useState("");
+   295→   295→  const [instructionsDraft, setInstructionsDraft] = useState("");
+   296→   296→  const [input, setInput] = useState("");
+   297→   297→  const [sending, setSending] = useState(false);
+   298→   298→  const [error, setError] = useState("");
+   299→   299→  const [cards, setCards] = useState<Flashcard[]>([]);
+   300→   300→  const [cardIdx, setCardIdx] = useState(0);
+   301→   301→  const [cardFlipped, setCardFlipped] = useState(false);
+   302→   302→  const [genCards, setGenCards] = useState(false);
+   303→   303→  const [showCards, setShowCards] = useState(false);
+   304→   304→  const [savingInstructions, setSavingInstructions] = useState(false);
+   305→   305→  const [sidebarOpen, setSidebarOpen] = useState(false);
+   306→   306→  const [copiedId, setCopiedId] = useState<string | null>(null);
+   307→   307→
+   308→   308→  /* new: files & tools */
+   309→   309→  const [attached, setAttached] = useState<AttMeta[]>([]);
+   310→   310→  const [uploading, setUploading] = useState<UploadingFile[]>([]);
+   311→   311→  const [webSearch, setWebSearch] = useState(false);
+   312→   312→  const [imageMode, setImageMode] = useState(false);
+   313→   313→  const [status, setStatus] = useState("");
+   314→   314→  const [dragging, setDragging] = useState(false);
+   315→   315→  const [recording, setRecording] = useState(false);
+   316→   316→  const [recordSecs, setRecordSecs] = useState(0);
+   317→   317→  const [transcribing, setTranscribing] = useState(false);
+   318→   318→  const [speaking, setSpeaking] = useState<{ id: string; loading: boolean } | null>(null);
+   319→   319→
+   320→   320→  const bottomRef = useRef<HTMLDivElement>(null);
+   321→   321→  const abortRef = useRef<AbortController | null>(null);
+   322→   322→  const fileInputRef = useRef<HTMLInputElement>(null);
+   323→   323→  const recorderRef = useRef<MediaRecorder | null>(null);
+   324→   324→  const chunksRef = useRef<Blob[]>([]);
+   325→   325→  const audioRef = useRef<HTMLAudioElement | null>(null);
+   326→   326→  const speechTokenRef = useRef(0);
+   327→   327→  /* while a reply is streaming, the `meta` event flips activeId to the
+   328→   328→     (possibly new) conversation id — the history-refetch effect must NOT
+   329→   329→     run then, or it replaces the streamed placeholder with the server's
+   330→   330→     pre-reply history and the visible reply vanishes */
+   331→   331→  const sendingRef = useRef(false);
+   332→   332→
+   333→   333→  /* ---------- conversation list ---------- */
+   334→   334→  const loadConversations = useCallback(async () => {
+   335→   335→    const sid = aiSessionId();
+   336→   336→    if (!sid) return;
+   337→   337→    const r = await fetch(`/api/ai/conversations?sessionId=${encodeURIComponent(sid)}`);
+   338→   338→    if (r.ok) {
+   339→   339→      const data = (await r.json()) as { conversations?: ConversationRow[] };
+   340→   340→      setConversations(data.conversations ?? []);
+   341→   341→    }
+   342→   342→  }, []);
+   343→   343→
+   344→   344→  useEffect(() => {
+   345→   345→    void loadConversations();
+   346→   346→    setCards(lsGet<Flashcard[]>(FLASHCARD_KEY, []));
+   347→   347→  }, [loadConversations]);
+   348→   348→
+   349→   349→  /* ---------- load messages for active conversation ---------- */
+   350→   350→  useEffect(() => {
+   351→   351→    if (!activeId) return;
+   352→   352→    if (sendingRef.current) return; /* streaming — keep the live UI */
+   353→   353→    const sid = aiSessionId();
+   354→   354→    void (async () => {
+   355→   355→      const r = await fetch(
+   356→   356→        `/api/ai/conversations/${activeId}?sessionId=${encodeURIComponent(sid)}`
+   357→   357→      );
+   358→   358→      if (r.ok) {
+   359→   359→        const data = (await r.json()) as {
+   360→   360→          conversation?: ConversationRow;
+   361→   361→          messages?: AIMsg[];
+   362→   362→        };
+   363→   363→        if (data.conversation) {
+   364→   364→          setMessages(data.messages ?? []);
+   365→   365→          setInstructions(data.conversation.instructions ?? "");
+   366→   366→          setInstructionsDraft(data.conversation.instructions ?? "");
+   367→   367→        }
+   368→   368→      }
+   369→   369→    })();
+   370→   370→  }, [activeId]);
+   371→   371→
+   372→   372→  useEffect(() => {
+   373→   373→    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+   374→   374→  }, [messages, sending]);
+   375→   375→
+   376→   376→  /* recording timer */
+   377→   377→  useEffect(() => {
+   378→   378→    if (!recording) return;
+   379→   379→    setRecordSecs(0);
+   380→   380→    const t = setInterval(() => setRecordSecs((s) => s + 1), 1000);
+   381→   381→    return () => clearInterval(t);
+   382→   382→  }, [recording]);
+   383→   383→
+   384→   384→  /* ---------- actions ---------- */
+   385→   385→  const newChat = () => {
+   386→   386→    if (sending) abortRef.current?.abort();
+   387→   387→    setActiveId(null);
+   388→   388→    setMessages([]);
+   389→   389→    setInstructions("");
+   390→   390→    setInstructionsDraft("");
+   391→   391→    setError("");
+   392→   392→    setAttached([]);
+   393→   393→    setStatus("");
+   394→   394→    setSidebarOpen(false);
+   395→   395→  };
+   396→   396→
+   397→   397→  /* ---------- file uploads (XHR for progress) ---------- */
+   398→   398→  const uploadOne = (file: File) =>
+   399→   399→    new Promise<AttMeta | null>((resolve) => {
+   400→   400→      const sid = aiSessionId();
+   401→   401→      if (!sid) return resolve(null);
+   402→   402→      const fd = new FormData();
+   403→   403→      fd.append("sessionId", sid);
+   404→   404→      fd.append("file", file);
+   405→   405→      const key = "up-" + Math.random().toString(36).slice(2);
+   406→   406→      setUploading((u) => [...u, { key, name: file.name, pct: 0 }]);
+   407→   407→      const xhr = new XMLHttpRequest();
+   408→   408→      xhr.upload.onprogress = (e) => {
+   409→   409→        if (e.lengthComputable) {
+   410→   410→          const pct = Math.round((e.loaded / e.total) * 100);
+   411→   411→          setUploading((u) => u.map((x) => (x.key === key ? { ...x, pct } : x)));
+   412→   412→        }
+   413→   413→      };
+   414→   414→      const done = () => setUploading((u) => u.filter((x) => x.key !== key));
+   415→   415→      xhr.onload = () => {
+   416→   416→        done();
+   417→   417→        try {
+   418→   418→          const data = JSON.parse(xhr.responseText) as {
+   419→   419→            files?: AttMeta[];
+   420→   420→            errors?: { name: string; error: string }[];
+   421→   421→            error?: string;
+   422→   422→          };
+   423→   423→          if (xhr.status === 200 && data.files?.length) {
+   424→   424→            if (data.errors?.length) setError(`${data.errors[0].name}: ${data.errors[0].error}`);
+   425→   425→            resolve(data.files[0]);
+   426→   426→          } else {
+   427→   427→            setError(data.error || data.errors?.[0]?.error || `Upload failed (${xhr.status})`);
+   428→   428→            resolve(null);
+   429→   429→          }
+   430→   430→        } catch {
+   431→   431→          setError("Upload failed — the server sent an invalid response.");
+   432→   432→          resolve(null);
+   433→   433→        }
+   434→   434→      };
+   435→   435→      xhr.onerror = () => {
+   436→   436→        done();
+   437→   437→        setError(`Could not upload ${file.name} — check your connection.`);
+   438→   438→        resolve(null);
+   439→   439→      };
+   440→   440→      xhr.open("POST", "/api/ai/files");
+   441→   441→      xhr.send(fd);
+   442→   442→    });
+   443→   443→
+   444→   444→  const uploadFiles = useCallback(async (list: FileList | File[]) => {
+   445→   445→    const files = Array.from(list).filter((f) => f.size > 0);
+   446→   446→    if (!files.length) return;
+   447→   447→    setError("");
+   448→   448→    const room = MAX_ATTACH - attached.length - uploading.length;
+   449→   449→    if (room <= 0) {
+   450→   450→      setError(`Up to ${MAX_ATTACH} files per message.`);
+   451→   451→      return;
+   452→   452→    }
+   453→   453→    const batch = files.slice(0, room);
+   454→   454→    if (files.length > batch.length) setError(`Only ${batch.length} more file(s) fit on this message.`);
+   455→   455→    const metas = await Promise.all(batch.map(uploadOne));
+   456→   456→    const ok = metas.filter((m): m is AttMeta => !!m);
+   457→   457→    if (ok.length) setAttached((a) => [...a, ...ok].slice(0, MAX_ATTACH));
+   458→   458→  }, [attached.length, uploading.length]);
+   459→   459→
+   460→   460→  const onDrop = (e: React.DragEvent) => {
+   461→   461→    e.preventDefault();
+   462→   462→    setDragging(false);
+   463→   463→    if (e.dataTransfer?.files?.length) void uploadFiles(e.dataTransfer.files);
+   464→   464→  };
+   465→   465→
+   466→   466→  const onPaste = (e: React.ClipboardEvent) => {
+   467→   467→    if (e.clipboardData?.files?.length) {
+   468→   468→      e.preventDefault();
+   469→   469→      void uploadFiles(e.clipboardData.files);
+   470→   470→    }
+   471→   471→  };
+   472→   472→
+   473→   473→  /* ---------- voice input ---------- */
+   474→   474→  const startRecording = async () => {
+   475→   475→    setError("");
+   476→   476→    try {
+   477→   477→      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+   478→   478→      const rec = new MediaRecorder(stream);
+   479→   479→      chunksRef.current = [];
+   480→   480→      rec.ondataavailable = (e) => {
+   481→   481→        if (e.data.size > 0) chunksRef.current.push(e.data);
+   482→   482→      };
+   483→   483→      rec.onstop = () => stream.getTracks().forEach((t) => t.stop());
+   484→   484→      recorderRef.current = rec;
+   485→   485→      rec.start();
+   486→   486→      setRecording(true);
+   487→   487→    } catch {
+   488→   488→      setError("Microphone unavailable — check browser permissions.");
+   489→   489→    }
+   490→   490→  };
+   491→   491→
+   492→   492→  const stopRecording = async () => {
+   493→   493→    const rec = recorderRef.current;
+   494→   494→    if (!rec) return;
+   495→   495→    setRecording(false);
+   496→   496→    setTranscribing(true);
+   497→   497→    try {
+   498→   498→      await new Promise<void>((res) => {
+   499→   499→        rec.onstop = () => res();
+   500→   500→        rec.stop();
+   501→   501→      });
+   502→   502→      const blob = new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" });
+   503→   503→      chunksRef.current = [];
+   504→   504→      if (!blob.size) throw new Error("nothing recorded");
+   505→   505→      const ctx = new AudioContext();
+   506→   506→      const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+   507→   507→      await ctx.close();
+   508→   508→      const wav = encodeWav(decoded, 16000);
+   509→   509→      const fd = new FormData();
+   510→   510→      fd.append("file", new Blob([wav], { type: "audio/wav" }));
+   511→   511→      const r = await fetch("/api/ai/transcribe", { method: "POST", body: fd });
+   512→   512→      const data = (await r.json().catch(() => ({}))) as { text?: string; error?: string };
+   513→   513→      if (r.ok && data.text) {
+   514→   514→        const t = data.text;
+   515→   515→        setInput((p) => (p ? `${p} ${t}`.slice(0, 8000) : t));
+   516→   516→      } else {
+   517→   517→        setError(data.error || "Could not transcribe — try again.");
+   518→   518→      }
+   519→   519→    } catch (e) {
+   520→   520→      setError(e instanceof Error ? e.message : "Voice input failed.");
+   521→   521→    } finally {
+   522→   522→      setTranscribing(false);
+   523→   523→      recorderRef.current = null;
+   524→   524→    }
+   525→   525→  };
+   526→   526→
+   527→   527→  /* ---------- read aloud (TTS) ---------- */
+   528→   528→  const stopSpeaking = () => {
+   529→   529→    speechTokenRef.current++;
+   530→   530→    audioRef.current?.pause();
+   531→   531→    audioRef.current = null;
+   532→   532→    setSpeaking(null);
+   533→   533→  };
+   534→   534→
+   535→   535→  const speak = async (m: AIMsg) => {
+   536→   536→    if (speaking?.id === m.id) {
+   537→   537→      stopSpeaking();
+   538→   538→      return;
+   539→   539→    }
+   540→   540→    stopSpeaking();
+   541→   541→    const token = ++speechTokenRef.current;
+   542→   542→    setSpeaking({ id: m.id, loading: true });
+   543→   543→    try {
+   544→   544→      const chunks = splitForTts(m.content);
+   545→   545→      let first = true;
+   546→   546→      for (const chunk of chunks) {
+   547→   547→        if (speechTokenRef.current !== token) return;
+   548→   548→        const r = await fetch("/api/ai/tts", {
+   549→   549→          method: "POST",
+   550→   550→          headers: { "content-type": "application/json" },
+   551→   551→          body: JSON.stringify({ text: chunk }),
+   552→   552→        });
+   553→   553→        if (!r.ok) throw new Error("speech failed");
+   554→   554→        if (first) {
+   555→   555→          setSpeaking({ id: m.id, loading: false });
+   556→   556→          first = false;
+   557→   557→        }
+   558→   558→        if (speechTokenRef.current !== token) return;
+   559→   559→        const blob = await r.blob();
+   560→   560→        await new Promise<void>((res) => {
+   561→   561→          const url = URL.createObjectURL(blob);
+   562→   562→          const audio = new Audio(url);
+   563→   563→          audioRef.current = audio;
+   564→   564→          audio.onended = () => {
+   565→   565→            URL.revokeObjectURL(url);
+   566→   566→            res();
+   567→   567→          };
+   568→   568→          audio.onerror = () => {
+   569→   569→            URL.revokeObjectURL(url);
+   570→   570→            res();
+   571→   571→          };
+   572→   572→          void audio.play().catch(() => {
+   573→   573→            URL.revokeObjectURL(url);
+   574→   574→            res();
+   575→   575→          });
+   576→   576→        });
+   577→   577→      }
+   578→   578→    } catch {
+   579→   579→      setError("Could not generate speech for this message.");
+   580→   580→    } finally {
+   581→   581→      if (speechTokenRef.current === token) setSpeaking(null);
+   582→   582→    }
+   583→   583→  };
+   584→   584→
+   585→   585→  /* ---------- export ---------- */
+   586→   586→  const exportChat = () => {
+   587→   587→    if (!messages.length) return;
+   588→   588→    const md = [
+   589→   589→      "# Memphis AI — chat export",
+   590→   590→      "",
+   591→   591→      ...messages.map((m) => {
+   592→   592→        const atts = m.attachments?.length
+   593→   593→          ? `\n\n_Attachments: ${m.attachments.map((a) => a.name).join(", ")}_`
+   594→   594→          : "";
+   595→   595→        return `**${m.role === "user" ? "You" : "Memphis AI"}:**\n\n${m.content}${atts}\n`;
+   596→   596→      }),
+   597→   597→    ].join("\n---\n\n");
+   598→   598→    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+   599→   599→    const a = document.createElement("a");
+   600→   600→    a.href = URL.createObjectURL(blob);
+   601→   601→    a.download = `memphis-chat-${new Date().toISOString().slice(0, 10)}.md`;
+   602→   602→    a.click();
+   603→   603→    URL.revokeObjectURL(a.href);
+   604→   604→  };
+   605→   605→
+   606→   606→  /* ---------- send ---------- */
+   607→   607→  const send = async () => {
+   608→   608→    const text = input.trim();
+   609→   609→    const atts = attached;
+   610→   610→    if ((!text && !atts.length) || sending || uploading.length) return;
+   611→   611→    const sid = aiSessionId();
+   612→   612→    if (!sid) return;
+   613→   613→    setError("");
+   614→   614→    setInput("");
+   615→   615→    setAttached([]);
+   616→   616→    setStatus("");
+   617→   617→    setSending(true);
+   618→   618→    stopSpeaking();
+   619→   619→
+   620→   620→    const userMsg: AIMsg = {
+   621→   621→      id: "local-" + Date.now(),
+   622→   622→      role: "user",
+   623→   623→      content: text || "(files attached — please review them)",
+   624→   624→      attachments: atts.length ? atts : undefined,
+   625→   625→    };
+   626→   626→    const streamMsg: AIMsg = { id: "stream", role: "assistant", content: "", streaming: true };
+   627→   627→    setMessages((m) => [...m, userMsg, streamMsg]);
+   628→   628→    sendingRef.current = true;
+   629→   629→
+   630→   630→    const controller = new AbortController();
+   631→   631→    abortRef.current = controller;
+   632→   632→
+   633→   633→    try {
+   634→   634→      const res = await fetch("/api/ai/chat", {
+   635→   635→        method: "POST",
+   636→   636→        headers: { "content-type": "application/json" },
+   637→   637→        body: JSON.stringify({
+   638→   638→          sessionId: sid,
+   639→   639→          conversationId: activeId,
+   640→   640→          message: text,
+   641→   641→          instructions: instructionsDraft,
+   642→   642→          attachments: atts.map((a) => a.id),
+   643→   643→          webSearch,
+   644→   644→          imageMode,
+   645→   645→        }),
+   646→   646→        signal: controller.signal,
+   647→   647→      });
+   648→   648→
+   649→   649→      if (!res.ok || !res.body) {
+   650→   650→        const data = (await res.json().catch(() => ({}))) as { error?: string };
+   651→   651→        throw new Error(data.error || `Request failed (${res.status})`);
+   652→   652→      }
+   653→   653→
+   654→   654→      const reader = res.body.getReader();
+   655→   655→      const decoder = new TextDecoder();
+   656→   656→      let buffer = "";
+   657→   657→      let acc = "";
+   658→   658→      let streamAtts: AttMeta[] | null = null;
+   659→   659→
+   660→   660→      for (;;) {
+   661→   661→        const { done, value } = await reader.read();
+   662→   662→        if (done) break;
+   663→   663→        buffer += decoder.decode(value, { stream: true });
+   664→   664→        const blocks = buffer.split("\n\n");
+   665→   665→        buffer = blocks.pop() ?? "";
+   666→   666→        for (const block of blocks) {
+   667→   667→          const evLine = block.split("\n").find((l) => l.startsWith("event: "));
+   668→   668→          const dataLine = block.split("\n").find((l) => l.startsWith("data: "));
+   669→   669→          if (!evLine || !dataLine) continue;
+   670→   670→          const event = evLine.slice(7).trim();
+   671→   671→          let payload: Record<string, unknown> = {};
+   672→   672→          try {
+   673→   673→            payload = JSON.parse(dataLine.slice(6));
+   674→   674→          } catch {
+   675→   675→            continue;
+   676→   676→          }
+   677→   677→          if (event === "meta" && typeof payload.conversationId === "string") {
+   678→   678→            setActiveId(payload.conversationId);
+   679→   679→          } else if (event === "status" && typeof payload.stage === "string") {
+   680→   680→            setStatus(payload.stage);
+   681→   681→          } else if (event === "delta" && typeof payload.text === "string") {
+   682→   682→            acc += payload.text;
+   683→   683→            setStatus("");
+   684→   684→            setMessages((m) =>
+   685→   685→              m.map((msg) => (msg.id === "stream" ? { ...msg, content: acc } : msg))
+   686→   686→            );
+   687→   687→          } else if (event === "error") {
+   688→   688→            throw new Error(String(payload.message || "The model is unavailable."));
+   689→   689→          } else if (event === "done") {
+   690→   690→            if (Array.isArray(payload.attachments)) {
+   691→   691→              streamAtts = payload.attachments as AttMeta[];
+   692→   692→            }
+   693→   693→            setMessages((m) =>
+   694→   694→              m.map((msg) =>
+   695→   695→                msg.id === "stream"
+   696→   696→                  ? {
+   697→   697→                      id: String(payload.messageId ?? "saved"),
+   698→   698→                      role: "assistant",
+   699→   699→                      content: acc,
+   700→   700→                      attachments: streamAtts ?? undefined,
+   701→   701→                    }
+   702→   702→                  : msg
+   703→   703→              )
+   704→   704→            );
+   705→   705→          }
+   706→   706→        }
+   707→   707→      }
+   708→   708→      void loadConversations();
+   709→   709→    } catch (e) {
+   710→   710→      const msg = e instanceof Error ? e.message : String(e);
+   711→   711→      if (msg !== "The user aborted a request." && !msg.toLowerCase().includes("abort")) {
+   712→   712→        setError(msg);
+   713→   713→      }
+   714→   714→      setMessages((m) =>
+   715→   715→        m
+   716→   716→          /* rename any orphaned stream placeholder so the next send
+   717→   717→             can't produce a duplicate React key */
+   718→   718→          .map((x) => (x.id === "stream" ? { ...x, id: "aborted-" + Date.now(), streaming: false } : x))
+   719→   719→          .filter((x) => x.role === "user" || x.content)
+   720→   720→      );
+   721→   721→    } finally {
+   722→   722→      sendingRef.current = false;
+   723→   723→      setSending(false);
+   724→   724→      setStatus("");
+   725→   725→      abortRef.current = null;
+   726→   726→    }
+   727→   727→  };
+   728→   728→
+   729→   729→  const saveInstructions = async () => {
+   730→   730→    if (!activeId) {
+   731→   731→      setInstructions(instructionsDraft);
+   732→   732→      return;
+   733→   733→    }
+   734→   734→    setSavingInstructions(true);
+   735→   735→    try {
+   736→   736→      const r = await fetch(
+   737→   737→        `/api/ai/conversations/${activeId}?sessionId=${encodeURIComponent(aiSessionId())}`,
+   738→   738→        {
+   739→   739→          method: "PATCH",
+   740→   740→          headers: { "content-type": "application/json" },
+   741→   741→          body: JSON.stringify({ instructions: instructionsDraft }),
+   742→   742→        }
+   743→   743→      );
+   744→   744→      if (!r.ok) {
+   745→   745→        const data = (await r.json().catch(() => ({}))) as { error?: string };
+   746→   746→        setError(data.error || "Could not save instructions.");
+   747→   747→        return;
+   748→   748→      }
+   749→   749→      setInstructions(instructionsDraft);
+   750→   750→    } catch {
+   751→   751→      setError("Could not save instructions — check your connection.");
+   752→   752→    } finally {
+   753→   753→      setSavingInstructions(false);
+   754→   754→    }
+   755→   755→  };
+   756→   756→
+   757→   757→  const deleteConversation = async (id: string) => {
+   758→   758→    try {
+   759→   759→      await fetch(
+   760→   760→        `/api/ai/conversations/${id}?sessionId=${encodeURIComponent(aiSessionId())}`,
+   761→   761→        { method: "DELETE" }
+   762→   762→      );
+   763→   763→    } catch { /* offline — keep the row; next reload re-syncs */ }
+   764→   764→    if (activeId === id) newChat();
+   765→   765→    void loadConversations();
+   766→   766→  };
+   767→   767→
+   768→   768→  const generateFlashcards = async () => {
+   769→   769→    if (genCards) return;
+   770→   770→    if (!messages.length) {
+   771→   771→      setError("Chat about a topic first, then build flashcards from it.");
+   772→   772→      return;
+   773→   773→    }
+   774→   774→    setGenCards(true);
+   775→   775→    setError("");
+   776→   776→    try {
+   777→   777→      const r = await fetch("/api/ai/flashcards", {
+   778→   778→        method: "POST",
+   779→   779→        headers: { "content-type": "application/json" },
+   780→   780→        body: JSON.stringify({ sessionId: aiSessionId(), conversationId: activeId }),
+   781→   781→      });
+   782→   782→      const data = (await r.json().catch(() => ({}))) as { cards?: Flashcard[]; error?: string };
+   783→   783→      if (r.ok && data.cards?.length) {
+   784→   784→        const next = [...data.cards, ...cards].slice(0, 120);
+   785→   785→        setCards(next);
+   786→   786→        lsSet(FLASHCARD_KEY, next);
+   787→   787→        setCardIdx(0);
+   788→   788→        setCardFlipped(false);
+   789→   789→        setShowCards(true);
+   790→   790→      } else {
+   791→   791→        setError(data.error || "Could not build flashcards — try again.");
+   792→   792→      }
+   793→   793→    } catch {
+   794→   794→      setError("Could not build flashcards — check your connection.");
+   795→   795→    } finally {
+   796→   796→      setGenCards(false);
+   797→   797→    }
+   798→   798→  };
+   799→   799→
+   800→   800→  const copyMessage = async (id: string, content: string) => {
+   801→   801→    try {
+   802→   802→      await navigator.clipboard.writeText(content);
+   803→   803→      setCopiedId(id);
+   804→   804→      setTimeout(() => setCopiedId(null), 1500);
+   805→   805→    } catch {
+   806→   806→      /* clipboard unavailable */
+   807→   807→    }
+   808→   808→  };
+   809→   809→
+   810→   810→  /* ---------- render ---------- */
+   811→   811→  const card = cards[cardIdx];
+   812→   812→  const busyLabel =
+   813→   813→    status && STATUS_LABEL[status]
+   814→   814→      ? STATUS_LABEL[status]
+   815→   815→      : sending
+   816→   816→        ? "thinking"
+   817→   817→        : "";
+   818→   818→
+   819→   819→  return (
+   820→   820→    <div
+   821→   821→      className="flex-1 flex min-h-0 relative"
+   822→   822→      onDragOver={(e) => {
+   823→   823→        e.preventDefault();
+   824→   824→        setDragging(true);
+   825→   825→      }}
+   826→   826→      onDragLeave={(e) => {
+   827→   827→        if (e.currentTarget === e.target) setDragging(false);
+   828→   828→      }}
+   829→   829→      onDrop={onDrop}
+   830→   830→    >
+   831→   831→      {/* drag overlay */}
+   832→   832→      {dragging && (
+   833→   833→        <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+   834→   834→          <div className="border-2 border-dashed border-white/50 rounded-2xl px-10 py-8 text-center">
+   835→   835→            <Paperclip className="size-8 mx-auto text-white mb-3" />
+   836→   836→            <p className="text-white font-semibold">Drop files to attach</p>
+   837→   837→            <p className="text-[12px] text-[#999] mt-1">
+   838→   838→              PDFs, docs, sheets, images, audio, video, code — anything
+   839→   839→            </p>
+   840→   840→          </div>
+   841→   841→        </div>
+   842→   842→      )}
+   843→   843→
+   844→   844→      {/* sidebar */}
+   845→   845→      <aside
+   846→   846→        className={`${sidebarOpen ? "flex" : "hidden"} md:flex absolute md:relative inset-0 md:inset-auto z-30 md:z-auto bg-black/95 md:bg-transparent flex-col w-64 md:w-60 shrink-0 border-r border-[#141414]`}
+   847→   847→      >
+   848→   848→        <div className="p-3 border-b border-[#141414] flex gap-2">
+   849→   849→          <Button
+   850→   850→            onClick={newChat}
+   851→   851→            className="flex-1 bg-white text-black hover:bg-[#e0e0e0]"
+   852→   852→            size="sm"
+   853→   853→          >
+   854→   854→            <Plus className="size-4 mr-1" /> New chat
+   855→   855→          </Button>
+   856→   856→          <Button
+   857→   857→            variant="outline"
+   858→   858→            size="icon"
+   859→   859→            className="md:hidden border-[#2a2a2a] text-white"
+   860→   860→            onClick={() => setSidebarOpen(false)}
+   861→   861→            aria-label="Close conversation list"
+   862→   862→          >
+   863→   863→            <ChevronRight className="size-4" />
+   864→   864→          </Button>
+   865→   865→        </div>
+   866→   866→        <div className="flex-1 overflow-y-auto p-2 memphis-scroll">
+   867→   867→          <p className="mono-label px-2 py-1">Your chats</p>
+   868→   868→          {conversations.length === 0 && (
+   869→   869→            <p className="text-[12px] text-[#555] px-2 py-2">
+   870→   870→              Your conversations appear here — saved on this Memphis server for your browser
+   871→   871→              session.
+   872→   872→            </p>
+   873→   873→          )}
+   874→   874→          {conversations.map((c) => (
+   875→   875→            <div key={c.id} className="group flex items-center">
+   876→   876→              <button
+   877→   877→                onClick={() => {
+   878→   878→                  setActiveId(c.id);
+   879→   879→                  setSidebarOpen(false);
+   880→   880→                }}
+   881→   881→                className={`flex-1 text-left px-2 py-1.5 rounded-md text-[13px] truncate transition-colors ${
+   882→   882→                  activeId === c.id
+   883→   883→                    ? "bg-[#141414] text-white"
+   884→   884→                    : "text-[#9a9a9a] hover:bg-[#0d0d0d] hover:text-white"
+   885→   885→                }`}
+   886→   886→              >
+   887→   887→                {c.title}
+   888→   888→              </button>
+   889→   889→              <button
+   890→   890→                onClick={() => void deleteConversation(c.id)}
+   891→   891→                aria-label={`Delete ${c.title}`}
+   892→   892→                className="opacity-0 group-hover:opacity-100 p-1.5 text-[#666] hover:text-white"
+   893→   893→              >
+   894→   894→                <Trash2 className="size-3.5" />
+   895→   895→              </button>
+   896→   896→            </div>
+   897→   897→          ))}
+   898→   898→        </div>
+   899→   899→        <div className="p-3 border-t border-[#141414] flex items-center gap-1.5 text-[11px] text-[#777]">
+   900→   900→          <InfinityIcon className="size-3.5" />
+   901→   901→          GLM · free · unlimited
+   902→   902→        </div>
+   903→   903→      </aside>
+   904→   904→
+   905→   905→      {/* main */}
+   906→   906→      <div className="flex-1 flex flex-col min-w-0">
+   907→   907→        <div className="border-b border-[#141414] px-4 py-2.5 flex items-center gap-2">
+   908→   908→          <Button
+   909→   909→            variant="ghost"
+   910→   910→            size="icon"
+   911→   911→            className="md:hidden text-white size-8"
+   912→   912→            onClick={() => setSidebarOpen(true)}
+   913→   913→            aria-label="Open conversation list"
+   914→   914→          >
+   915→   915→            <Menu className="size-4" />
+   916→   916→          </Button>
+   917→   917→          <Sparkles className="size-4 text-white" />
+   918→   918→          <h1 className="text-sm font-semibold text-white">Memphis AI</h1>
+   919→   919→          <span className="text-[11px] text-[#555] hidden lg:inline">
+   920→   920→            files · vision · voice · search · images
+   921→   921→          </span>
+   922→   922→          <div className="ml-auto flex items-center gap-2">
+   923→   923→            {messages.length > 0 && (
+   924→   924→              <Button
+   925→   925→                variant="outline"
+   926→   926→                size="sm"
+   927→   927→                onClick={exportChat}
+   928→   928→                className="border-[#2a2a2a] text-white hover:bg-[#101010]"
+   929→   929→              >
+   930→   930→                <Download className="size-4 mr-1" />
+   931→   931→                <span className="hidden sm:inline">Export</span>
+   932→   932→              </Button>
+   933→   933→            )}
+   934→   934→            <Button
+   935→   935→              variant="outline"
+   936→   936→              size="sm"
+   937→   937→              onClick={() => void generateFlashcards()}
+   938→   938→              disabled={genCards}
+   939→   939→              className="border-[#2a2a2a] text-white hover:bg-[#101010]"
+   940→   940→            >
+   941→   941→              <Layers className="size-4 mr-1" />
+   942→   942→              {genCards ? "Building…" : "Flashcards"}
+   943→   943→            </Button>
+   944→   944→            {cards.length > 0 && (
+   945→   945→              <Button
+   946→   946→                variant="ghost"
+   947→   947→                size="sm"
+   948→   948→                onClick={() => {
+   949→   949→                  setCardIdx(0);
+   950→   950→                  setCardFlipped(false);
+   951→   951→                  setShowCards(true);
+   952→   952→                }}
+   953→   953→                className="text-[#9a9a9a] hover:text-white"
+   954→   954→              >
+   955→   955→                Study ({cards.length})
+   956→   956→              </Button>
+   957→   957→            )}
+   958→   958→          </div>
+   959→   959→        </div>
+   960→   960→
+   961→   961→        {/* messages */}
+   962→   962→        <div className="flex-1 overflow-y-auto memphis-scroll">
+   963→   963→          <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+   964→   964→            {messages.length === 0 && !sending && (
+   965→   965→              <div className="text-center py-12">
+   966→   966→                <Sparkles className="size-7 mx-auto text-[#555] mb-3" />
+   967→   967→                <h2 className="text-lg text-white font-semibold">How can I help today?</h2>
+   968→   968→                <p className="text-[13px] text-[#777] mt-2">
+   969→   969→                  A real AI chat running on GLM — free, unlimited, no account needed.
+   970→   970→                </p>
+   971→   971→                <div className="mt-3 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] text-[#666]">
+   972→   972→                  <span className="inline-flex items-center gap-1"><Paperclip className="size-3" /> any file</span>
+   973→   973→                  <span className="inline-flex items-center gap-1"><ImageIcon className="size-3" /> vision</span>
+   974→   974→                  <span className="inline-flex items-center gap-1"><Mic className="size-3" /> voice</span>
+   975→   975→                  <span className="inline-flex items-center gap-1"><Globe className="size-3" /> web search</span>
+   976→   976→                  <span className="inline-flex items-center gap-1"><Palette className="size-3" /> images</span>
+   977→   977→                </div>
+   978→   978→                <div className="mt-6 grid sm:grid-cols-2 gap-2 text-left">
+   979→   979→                  {[
+   980→   980→                    "Summarize a PDF — attach it below",
+   981→   981→                    "Search the web for today's tech news",
+   982→   982→                    "Generate an image of a neon city at night",
+   983→   983→                    "Give me a 20-minute full-body workout plan",
+   984→   984→                  ].map((s) => (
+   985→   985→                    <button
+   986→   986→                      key={s}
+   987→   987→                      onClick={() => setInput(s)}
+   988→   988→                      className="text-[13px] text-[#c9c9c9] border border-[#1a1a1a] bg-[#080808] rounded-lg p-3 hover:border-[#3a3a3a] hover:bg-[#0d0d0d] transition-colors"
+   989→   989→                    >
+   990→   990→                      {s}
+   991→   991→                    </button>
+   992→   992→                  ))}
+   993→   993→                </div>
+   994→   994→              </div>
+   995→   995→            )}
+   996→   996→            {messages.map((m) => (
+   997→   997→              <div
+   998→   998→                key={m.id}
+   999→   999→                className={m.role === "user" ? "flex justify-end" : "flex"}
+  1000→  1000→              >
+  1001→  1001→                <div
+  1002→  1002→                  className={`group relative max-w-[88%] rounded-xl px-3.5 py-2.5 ${
+  1003→  1003→                    m.role === "user"
+  1004→  1004→                      ? "bg-white text-black"
+  1005→  1005→                      : "bg-[#0d0d0d] text-[#dcdcdc] border border-[#1a1a1a]"
+  1006→  1006→                  }`}
+  1007→  1007→                >
+  1008→  1008→                  {m.role === "user" ? (
+  1009→  1009→                    <>
+  1010→  1010→                      {m.attachments && m.attachments.length > 0 && (
+  1011→  1011→                        <div className="flex flex-wrap gap-1.5 mb-2">
+  1012→  1012→                          {m.attachments.map((a) => (
+  1013→  1013→                            <AttChip key={a.id} att={a} />
+  1014→  1014→                          ))}
+  1015→  1015→                        </div>
+  1016→  1016→                      )}
+  1017→  1017→                      <p className="text-[13.5px] leading-relaxed whitespace-pre-wrap break-words">
+  1018→  1018→                        {m.content}
+  1019→  1019→                      </p>
+  1020→  1020→                    </>
+  1021→  1021→                  ) : m.content ? (
+  1022→  1022→                    <Md text={m.content} />
+  1023→  1023→                  ) : (
+  1024→  1024→                    <span className="flex items-center gap-1.5 text-[13px] text-[#777]">
+  1025→  1025→                      <span className="boot-pulse">{busyLabel || "thinking"}</span>
+  1026→  1026→                      <span className="flex gap-0.5">
+  1027→  1027→                        {[0, 1, 2].map((i) => (
+  1028→  1028→                          <span
+  1029→  1029→                            key={i}
+  1030→  1030→                            className="size-1 rounded-full bg-[#777]"
+  1031→  1031→                            style={{ animation: `blink 1.2s ${i * 0.2}s infinite` }}
+  1032→  1032→                          />
+  1033→  1033→                        ))}
+  1034→  1034→                      </span>
+  1035→  1035→                    </span>
+  1036→  1036→                  )}
+  1037→  1037→                  {m.role === "assistant" && m.content && !m.streaming && (
+  1038→  1038→                    <div className="absolute -bottom-2 right-2 flex gap-0.5">
+  1039→  1039→                      <button
+  1040→  1040→                        onClick={() => void speak(m)}
+  1041→  1041→                        aria-label={speaking?.id === m.id ? "Stop reading aloud" : "Read aloud"}
+  1042→  1042→                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-[#161616] border border-[#262626] rounded p-1 text-[#888] hover:text-white"
+  1043→  1043→                      >
+  1044→  1044→                        {speaking?.id === m.id ? (
+  1045→  1045→                          speaking.loading ? (
+  1046→  1046→                            <Loader2 className="size-3 animate-spin" />
+  1047→  1047→                          ) : (
+  1048→  1048→                            <Volume2 className="size-3 text-white" />
+  1049→  1049→                          )
+  1050→  1050→                        ) : (
+  1051→  1051→                          <Volume2 className="size-3" />
+  1052→  1052→                        )}
+  1053→  1053→                      </button>
+  1054→  1054→                      <button
+  1055→  1055→                        onClick={() => void copyMessage(m.id, m.content)}
+  1056→  1056→                        aria-label="Copy message"
+  1057→  1057→                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-[#161616] border border-[#262626] rounded p-1 text-[#888] hover:text-white"
+  1058→  1058→                      >
+  1059→  1059→                        {copiedId === m.id ? (
+  1060→  1060→                          <Check className="size-3" />
+  1061→  1061→                        ) : (
+  1062→  1062→                          <Copy className="size-3" />
+  1063→  1063→                        )}
+  1064→  1064→                      </button>
+  1065→  1065→                    </div>
+  1066→  1066→                  )}
+  1067→  1067→                </div>
+  1068→  1068→              </div>
+  1069→  1069→            ))}
+  1070→  1070→            <div ref={bottomRef} />
+  1071→  1071→          </div>
+  1072→  1072→        </div>
+  1073→  1073→
+  1074→  1074→        {/* custom instructions */}
+  1075→  1075→        {instructions && (
+  1076→  1076→          <div className="px-4 py-2 border-t border-[#141414] bg-[#050505]">
+  1077→  1077→            <p className="text-[11px] text-[#666]">
+  1078→  1078→              <span className="font-mono uppercase tracking-wider">custom instructions:</span>{" "}
+  1079→  1079→              {instructions}
+  1080→  1080→            </p>
+  1081→  1081→          </div>
+  1082→  1082→        )}
+  1083→  1083→
+  1084→  1084→        {error && (
+  1085→  1085→          <div className="px-4 py-2 border-t border-[#141414]">
+  1086→  1086→            <p className="text-[12px] text-white bg-[#161616] border border-[#333] rounded px-2.5 py-1.5">
+  1087→  1087→              {error}
+  1088→  1088→            </p>
+  1089→  1089→          </div>
+  1090→  1090→        )}
+  1091→  1091→
+  1092→  1092→        {/* composer */}
+  1093→  1093→        <div className="border-t border-[#141414] p-3">
+  1094→  1094→          <div className="max-w-2xl mx-auto">
+  1095→  1095→            <div
+  1096→  1096→              className={`rounded-xl border bg-[#0a0a0a] transition-colors ${
+  1097→  1097→                dragging ? "border-white/60" : "border-[#1f1f1f] focus-within:border-[#333]"
+  1098→  1098→              }`}
+  1099→  1099→            >
+  1100→  1100→              {/* upload progress chips */}
+  1101→  1101→              {uploading.length > 0 && (
+  1102→  1102→                <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+  1103→  1103→                  {uploading.map((u) => (
+  1104→  1104→                    <span
+  1105→  1105→                      key={u.key}
+  1106→  1106→                      className="inline-flex items-center gap-1.5 max-w-[220px] rounded-lg border border-[#262626] bg-[#111] px-2 py-1 text-[11.5px] text-[#ccc]"
+  1107→  1107→                    >
+  1108→  1108→                      <Loader2 className="size-3.5 shrink-0 animate-spin text-[#8a8a8a]" />
+  1109→  1109→                      <span className="truncate">{u.name}</span>
+  1110→  1110→                      <span className="shrink-0 text-[#666] font-mono">{u.pct}%</span>
+  1111→  1111→                    </span>
+  1112→  1112→                  ))}
+  1113→  1113→                </div>
+  1114→  1114→              )}
+  1115→  1115→
+  1116→  1116→              {/* attached file chips */}
+  1117→  1117→              {attached.length > 0 && (
+  1118→  1118→                <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+  1119→  1119→                  {attached.map((a) => (
+  1120→  1120→                    <AttChip
+  1121→  1121→                      key={a.id}
+  1122→  1122→                      att={a}
+  1123→  1123→                      onRemove={() => setAttached((list) => list.filter((x) => x.id !== a.id))}
+  1124→  1124→                    />
+  1125→  1125→                  ))}
+  1126→  1126→                </div>
+  1127→  1127→              )}
+  1128→  1128→
+  1129→  1129→              <Textarea
+  1130→  1130→                value={input}
+  1131→  1131→                onChange={(e) => setInput(e.target.value)}
+  1132→  1132→                onKeyDown={(e) => {
+  1133→  1133→                  if (e.key === "Enter" && !e.shiftKey) {
+  1134→  1134→                    e.preventDefault();
+  1135→  1135→                    void send();
+  1136→  1136→                  }
+  1137→  1137→                }}
+  1138→  1138→                onPaste={onPaste}
+  1139→  1139→                placeholder={
+  1140→  1140→                  imageMode
+  1141→  1141→                    ? "Describe the image to create — or attach one to edit it…"
+  1142→  1142→                    : "Ask anything — attach files, paste images, or drop them here"
+  1143→  1143→                }
+  1144→  1144→                rows={2}
+  1145→  1145→                maxLength={8000}
+  1146→  1146→                aria-label="Message Memphis AI"
+  1147→  1147→                className="bg-transparent border-0 text-white placeholder:text-[#555] focus-visible:ring-0 min-h-0 resize-none pt-3"
+  1148→  1148→              />
+  1149→  1149→
+  1150→  1150→              {/* composer toolbar */}
+  1151→  1151→              <div className="flex items-center gap-1.5 px-2.5 pb-2.5 pt-1">
+  1152→  1152→                <input
+  1153→  1153→                  ref={fileInputRef}
+  1154→  1154→                  type="file"
+  1155→  1155→                  multiple
+  1156→  1156→                  className="hidden"
+  1157→  1157→                  onChange={(e) => {
+  1158→  1158→                    if (e.target.files?.length) void uploadFiles(e.target.files);
+  1159→  1159→                    e.target.value = "";
+  1160→  1160→                  }}
+  1161→  1161→                />
+  1162→  1162→                <button
+  1163→  1163→                  onClick={() => fileInputRef.current?.click()}
+  1164→  1164→                  disabled={attached.length + uploading.length >= MAX_ATTACH}
+  1165→  1165→                  aria-label="Attach files"
+  1166→  1166→                  title="Attach files — any type"
+  1167→  1167→                  className="p-2 rounded-lg text-[#999] hover:text-white hover:bg-[#161616] disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+  1168→  1168→                >
+  1169→  1169→                  <Paperclip className="size-4" />
+  1170→  1170→                </button>
+  1171→  1171→
+  1172→  1172→                <button
+  1173→  1173→                  onClick={() => {
+  1174→  1174→                    setWebSearch((v) => !v);
+  1175→  1175→                    if (imageMode) setImageMode(false);
+  1176→  1176→                  }}
+  1177→  1177→                  aria-pressed={webSearch}
+  1178→  1178→                  title="Search the web and cite sources"
+  1179→  1179→                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] border transition-colors ${
+  1180→  1180→                    webSearch
+  1181→  1181→                      ? "bg-white text-black border-white"
+  1182→  1182→                      : "border-[#262626] text-[#999] hover:text-white hover:bg-[#161616]"
+  1183→  1183→                  }`}
+  1184→  1184→                >
+  1185→  1185→                  <Globe className="size-3.5" /> Web
+  1186→  1186→                </button>
+  1187→  1187→
+  1188→  1188→                <button
+  1189→  1189→                  onClick={() => {
+  1190→  1190→                    setImageMode((v) => !v);
+  1191→  1191→                    if (webSearch) setWebSearch(false);
+  1192→  1192→                  }}
+  1193→  1193→                  aria-pressed={imageMode}
+  1194→  1194→                  title="Create or edit images"
+  1195→  1195→                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] border transition-colors ${
+  1196→  1196→                    imageMode
+  1197→  1197→                      ? "bg-white text-black border-white"
+  1198→  1198→                      : "border-[#262626] text-[#999] hover:text-white hover:bg-[#161616]"
+  1199→  1199→                  }`}
+  1200→  1200→                >
+  1201→  1201→                  <Palette className="size-3.5" /> Image
+  1202→  1202→                </button>
+  1203→  1203→
+  1204→  1204→                <div className="ml-auto flex items-center gap-1.5">
+  1205→  1205→                  {recording && (
+  1206→  1206→                    <span className="inline-flex items-center gap-1.5 text-[12px] text-red-400 font-mono">
+  1207→  1207→                      <span className="size-2 rounded-full bg-red-500 animate-pulse" />
+  1208→  1208→                      {String(Math.floor(recordSecs / 60)).padStart(2, "0")}:
+  1209→  1209→                      {String(recordSecs % 60).padStart(2, "0")}
+  1210→  1210→                    </span>
+  1211→  1211→                  )}
+  1212→  1212→                  {transcribing && (
+  1213→  1213→                    <span className="inline-flex items-center gap-1 text-[11px] text-[#888]">
+  1214→  1214→                      <Loader2 className="size-3 animate-spin" /> transcribing…
+  1215→  1215→                    </span>
+  1216→  1216→                  )}
+  1217→  1217→                  <button
+  1218→  1218→                    onClick={() => (recording ? void stopRecording() : void startRecording())}
+  1219→  1219→                    aria-label={recording ? "Stop recording" : "Record voice message"}
+  1220→  1220→                    title={recording ? "Stop & transcribe" : "Voice input"}
+  1221→  1221→                    className={`p-2 rounded-lg transition-colors ${
+  1222→  1222→                      recording
+  1223→  1223→                        ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
+  1224→  1224→                        : "text-[#999] hover:text-white hover:bg-[#161616]"
+  1225→  1225→                    }`}
+  1226→  1226→                  >
+  1227→  1227→                    {recording ? <Square className="size-4" /> : <Mic className="size-4" />}
+  1228→  1228→                  </button>
+  1229→  1229→                  <Button
+  1230→  1230→                    onClick={() => void send()}
+  1231→  1231→                    disabled={(!input.trim() && !attached.length) || sending || uploading.length > 0}
+  1232→  1232→                    className="bg-white text-black hover:bg-[#e0e0e0] size-9 p-0 rounded-lg"
+  1233→  1233→                    aria-label="Send message"
+  1234→  1234→                  >
+  1235→  1235→                    {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+  1236→  1236→                  </Button>
+  1237→  1237→                </div>
+  1238→  1238→              </div>
+  1239→  1239→            </div>
+  1240→  1240→
+  1241→  1241→            <div className="flex items-center justify-between mt-1.5 px-1">
+  1242→  1242→              <span className="text-[11px] text-[#555]">
+  1243→  1243→                {uploading.length > 0
+  1244→  1244→                  ? "Uploading & reading your files…"
+  1245→  1245→                  : sending
+  1246→  1246→                    ? busyLabel === "thinking"
+  1247→  1247→                      ? "GLM is thinking…"
+  1248→  1248→                      : busyLabel
+  1249→  1249→                        ? `${busyLabel}`
+  1250→  1250→                        : "GLM is writing…"
+  1251→  1251→                    : "Enter to send · Shift+Enter for newline"}
+  1252→  1252→              </span>
+  1253→  1253→              {attached.length > 0 && (
+  1254→  1254→                <span className="text-[11px] text-[#666]">
+  1255→  1255→                  {attached.length}/{MAX_ATTACH} files
+  1256→  1256→                </span>
+  1257→  1257→              )}
+  1258→  1258→            </div>
+  1259→  1259→
+  1260→  1260→            {/* custom instructions editor */}
+  1261→  1261→            <details className="mt-2 group">
+  1262→  1262→              <summary className="text-[12px] text-[#777] hover:text-white cursor-pointer select-none flex items-center gap-1.5">
+  1263→  1263→                <MessagesSquare className="size-3.5" /> Custom instructions
+  1264→  1264→              </summary>
+  1265→  1265→              <div className="mt-2 flex gap-2">
+  1266→  1266→                <Textarea
+  1267→  1267→                  value={instructionsDraft}
+  1268→  1268→                  onChange={(e) => setInstructionsDraft(e.target.value)}
+  1269→  1269→                  placeholder="e.g. Answer in Spanish. I'm a beginner coder — explain like I'm new."
+  1270→  1270→                  rows={2}
+  1271→  1271→                  maxLength={1000}
+  1272→  1272→                  className="bg-[#050505] border-[#1f1f1f] text-white placeholder:text-[#555] text-[12px] focus-visible:ring-white/30 min-h-0"
+  1273→  1273→                />
+  1274→  1274→                <Button
+  1275→  1275→                  size="sm"
+  1276→  1276→                  variant="outline"
+  1277→  1277→                  onClick={() => void saveInstructions()}
+  1278→  1278→                  disabled={savingInstructions}
+  1279→  1279→                  className="border-[#2a2a2a] text-white hover:bg-[#101010] self-start"
+  1280→  1280→                >
+  1281→  1281→                  <Save className="size-3.5" /> {savingInstructions ? "…" : "Save"}
+  1282→  1282→                </Button>
+  1283→  1283→              </div>
+  1284→  1284→            </details>
+  1285→  1285→          </div>
+  1286→  1286→        </div>
+  1287→  1287→      </div>
+  1288→  1288→
+  1289→  1289→      {/* flashcards modal */}
+  1290→  1290→      <Dialog open={showCards} onOpenChange={setShowCards}>
+  1291→  1291→        <DialogContent className="bg-[#050505] border-[#1f1f1f] text-white max-w-md">
+  1292→  1292→          <DialogHeader>
+  1293→  1293→            <DialogTitle className="flex items-center gap-2 text-base">
+  1294→  1294→              <Layers className="size-4" /> Flashcards
+  1295→  1295→            </DialogTitle>
+  1296→  1296→            <DialogDescription className="text-xs text-[#7a7a7a]">
+  1297→  1297→              Click the card to flip. {cards.length} card{cards.length === 1 ? "" : "s"} saved
+  1298→  1298→              on this device.
+  1299→  1299→            </DialogDescription>
+  1300→  1300→          </DialogHeader>
+  1301→  1301→          {card ? (
+  1302→  1302→            <>
+  1303→  1303→              <button
+  1304→  1304→                onClick={() => setCardFlipped((f) => !f)}
+  1305→  1305→                className="w-full min-h-44 rounded-lg border border-[#222] bg-[#0a0a0a] p-6 text-center hover:border-[#444] transition-colors"
+  1306→  1306→                aria-label={cardFlipped ? "Show question" : "Show answer"}
+  1307→  1307→              >
+  1308→  1308→                <p className="text-[11px] font-mono uppercase tracking-wider text-[#555] mb-2">
+  1309→  1309→                  {cardFlipped ? "answer" : "question"}
+  1310→  1310→                </p>
+  1311→  1311→                <p className="text-[15px] text-white leading-relaxed">
+  1312→  1312→                  {cardFlipped ? card.back : card.front}
+  1313→  1313→                </p>
+  1314→  1314→              </button>
+  1315→  1315→              <div className="flex items-center justify-between">
+  1316→  1316→                <Button
+  1317→  1317→                  variant="ghost"
+  1318→  1318→                  size="sm"
+  1319→  1319→                  onClick={() => {
+  1320→  1320→                    setCardIdx((i) => (i - 1 + cards.length) % cards.length);
+  1321→  1321→                    setCardFlipped(false);
+  1322→  1322→                  }}
+  1323→  1323→                  className="text-[#9a9a9a] hover:text-white"
+  1324→  1324→                >
+  1325→  1325→                  <ChevronLeft className="size-4" />
+  1326→  1326→                </Button>
+  1327→  1327→                <span className="text-[12px] text-[#777] font-mono">
+  1328→  1328→                  {cardIdx + 1} / {cards.length}
+  1329→  1329→                </span>
+  1330→  1330→                <div className="flex gap-1">
+  1331→  1331→                  <Button
+  1332→  1332→                    variant="ghost"
+  1333→  1333→                    size="sm"
+  1334→  1334→                    aria-label="Restart deck"
+  1335→  1335→                    onClick={() => {
+  1336→  1336→                      setCardIdx(0);
+  1337→  1337→                      setCardFlipped(false);
+  1338→  1338→                    }}
+  1339→  1339→                    className="text-[#9a9a9a] hover:text-white"
+  1340→  1340→                  >
+  1341→  1341→                    <RotateCcw className="size-4" />
+  1342→  1342→                  </Button>
+  1343→  1343→                  <Button
+  1344→  1344→                    variant="ghost"
+  1345→  1345→                    size="sm"
+  1346→  1346→                    aria-label="Delete this card"
+  1347→  1347→                    onClick={() => {
+  1348→  1348→                      const next = cards.filter((_, i) => i !== cardIdx);
+  1349→  1349→                      setCards(next);
+  1350→  1350→                      lsSet(FLASHCARD_KEY, next);
+  1351→  1351→                      setCardIdx((i) => Math.min(i, Math.max(0, next.length - 1)));
+  1352→  1352→                      if (!next.length) setShowCards(false);
+  1353→  1353→                    }}
+  1354→  1354→                    className="text-[#9a9a9a] hover:text-white"
+  1355→  1355→                  >
+  1356→  1356→                    <Trash2 className="size-4" />
+  1357→  1357→                  </Button>
+  1358→  1358→                  <Button
+  1359→  1359→                    variant="ghost"
+  1360→  1360→                    size="sm"
+  1361→  1361→                    onClick={() => {
+  1362→  1362→                      setCardIdx((i) => (i + 1) % cards.length);
+  1363→  1363→                      setCardFlipped(false);
+  1364→  1364→                    }}
+  1365→  1365→                    className="text-[#9a9a9a] hover:text-white"
+  1366→  1366→                  >
+  1367→  1367→                    <ChevronRight className="size-4" />
+  1368→  1368→                  </Button>
+  1369→  1369→                </div>
+  1370→  1370→              </div>
+  1371→  1371→            </>
+  1372→  1372→          ) : (
+  1373→  1373→            <p className="text-[13px] text-[#777] text-center py-6">
+  1374→  1374→              No cards — generate some from a chat.
+  1375→  1375→            </p>
+  1376→  1376→          )}
+  1377→  1377→        </DialogContent>
+  1378→  1378→      </Dialog>
+  1379→  1379→    </div>
+  1380→  1380→  );
+  1381→  1381→}
+  1382→  1382→

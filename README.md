@@ -37,8 +37,11 @@ Browser
        ├─ /utils/scramjet-utils.js               (plugins)
        ├─ /epoxy/index.mjs · /libcurl/index.mjs  (transports, in-page)
        │    └─ WebSocket → wisp relay (port 3001) → target site
-       ├─ /api/games    — 1,600+-game catalog (search / categories / ids)
-       ├─ /api/ai/*     — GLM chat (streaming SSE, no auth, no limits)
+       ├─ /api/games    — 3,500+-game catalog (search / categories / ids)
+       ├─ /api/ai/*     — GLM chat (streaming SSE, no auth, no limits):
+       │    Fast/Reasoning modes, any-file attachments, vision, web search
+       │    with citations, image gen/edit, voice in/out, regenerate/edit/
+       │    rename, follow-up suggestions — all session-scoped
        ├─ /api/games/scores, /api/auth/*, /api/reports
        └─ chat-service  — socket.io community chat (port 3003)
 ```

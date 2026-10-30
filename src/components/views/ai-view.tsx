@@ -12,6 +12,10 @@
    - Web search toggle with cited sources
    - Image mode: generate or edit pictures
    - Voice input (mic → ASR) and read-aloud (TTS)
+   - Fast / Reasoning modes — deep thinking streams live, then
+     collapses into a "show thinking" block
+   - Stop, regenerate, edit-and-resend, rename chats, follow-up
+     suggestion chips
    - Export the conversation as markdown
    ============================================================ */
 
@@ -54,6 +58,10 @@ import {
   Download,
   Volume2,
   X,
+  Zap,
+  Brain,
+  Pencil,
+  CornerDownRight,
   FileText,
   FileCode2,
   FileArchive,
@@ -80,6 +88,8 @@ interface AIMsg {
   content: string;
   streaming?: boolean;
   attachments?: AttMeta[] | null;
+  reasoning?: string;
+  mode?: string;
 }
 
 interface UploadingFile {
@@ -102,12 +112,14 @@ interface Flashcard {
 }
 
 const FLASHCARD_KEY = "memphis-flashcards";
+const MODE_KEY = "memphis-ai-mode";
 const MAX_ATTACH = 6;
 
 const STATUS_LABEL: Record<string, string> = {
   searching: "Searching the web…",
   reading: "Reading sources…",
   painting: "Painting your image…",
+  reasoning: "reasoning deeply",
   writing: "thinking",
 };
 
@@ -285,6 +297,42 @@ function AttChip({ att, onRemove }: { att: AttMeta; onRemove?: () => void }) {
   );
 }
 
+/* ---------------- chain-of-thought block (Reasoning mode) ---------------- */
+
+function ThinkBlock({ text, streaming }: { text: string; streaming?: boolean }) {
+  if (streaming) {
+    return (
+      <div className="mb-2 rounded-lg border border-[#1e1e1e] bg-[#070707] px-3 py-2">
+        <p className="flex items-center gap-1.5 text-[11px] text-[#8a8a8a] mb-1.5 font-mono uppercase tracking-wider">
+          <Brain className="size-3" /> thinking
+          <span className="flex gap-0.5">
+            {[0, 1, 2].map((i) => (
+              <span
+                key={i}
+                className="size-1 rounded-full bg-[#777]"
+                style={{ animation: `blink 1.2s ${i * 0.2}s infinite` }}
+              />
+            ))}
+          </span>
+        </p>
+        <div className="max-h-44 overflow-y-auto memphis-scroll text-[12px] leading-relaxed text-[#8f8f8f] whitespace-pre-wrap break-words">
+          {text}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <details className="mb-2 rounded-lg border border-[#1a1a1a] bg-[#070707]">
+      <summary className="cursor-pointer select-none text-[11px] text-[#8a8a8a] hover:text-[#c9c9c9] px-3 py-1.5 font-mono uppercase tracking-wider flex items-center gap-1.5 list-none [&::-webkit-details-marker]:hidden">
+        <Brain className="size-3" /> show thinking
+      </summary>
+      <div className="max-h-72 overflow-y-auto memphis-scroll text-[12px] leading-relaxed text-[#8f8f8f] whitespace-pre-wrap break-words px-3 pb-2.5">
+        {text}
+      </div>
+    </details>
+  );
+}
+
 /* ---------------- main view ---------------- */
 
 export default function AiView() {
@@ -317,9 +365,19 @@ export default function AiView() {
   const [transcribing, setTranscribing] = useState(false);
   const [speaking, setSpeaking] = useState<{ id: string; loading: boolean } | null>(null);
 
+  /* new: modes, turn replay, suggestions, rename */
+  const [mode, setMode] = useState<"fast" | "reasoning">(() =>
+    lsGet<"fast" | "reasoning">(MODE_KEY, "fast")
+  );
+  const [editing, setEditing] = useState<{ id: string } | null>(null);
+  const [suggestions, setSuggestions] = useState<{ forId: string; items: string[] } | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -348,6 +406,8 @@ export default function AiView() {
 
   /* ---------- load messages for active conversation ---------- */
   useEffect(() => {
+    setSuggestions(null);
+    setEditing(null);
     if (!activeId) return;
     if (sendingRef.current) return; /* streaming — keep the live UI */
     const sid = aiSessionId();
@@ -392,6 +452,13 @@ export default function AiView() {
     setAttached([]);
     setStatus("");
     setSidebarOpen(false);
+    setEditing(null);
+    setSuggestions(null);
+  };
+
+  const setModePersisted = (m: "fast" | "reasoning") => {
+    setMode(m);
+    lsSet(MODE_KEY, m);
   };
 
   /* ---------- file uploads (XHR for progress) ---------- */
@@ -603,28 +670,45 @@ export default function AiView() {
     URL.revokeObjectURL(a.href);
   };
 
-  /* ---------- send ---------- */
-  const send = async () => {
-    const text = input.trim();
-    const atts = attached;
-    if ((!text && !atts.length) || sending || uploading.length) return;
+  /* ---------- turn engine (send / regenerate / edit-resend) ---------- */
+  const runTurn = async (opts: {
+    text: string;
+    atts: AttMeta[];
+    regenerate?: boolean;
+    editMessageId?: string | null;
+  }) => {
+    if (sending || uploading.length) return;
     const sid = aiSessionId();
     if (!sid) return;
     setError("");
-    setInput("");
-    setAttached([]);
     setStatus("");
     setSending(true);
     stopSpeaking();
+    setSuggestions(null);
 
-    const userMsg: AIMsg = {
-      id: "local-" + Date.now(),
-      role: "user",
-      content: text || "(files attached — please review them)",
-      attachments: atts.length ? atts : undefined,
-    };
-    const streamMsg: AIMsg = { id: "stream", role: "assistant", content: "", streaming: true };
-    setMessages((m) => [...m, userMsg, streamMsg]);
+    /* local message-list surgery so the UI matches what the server
+       will do before the first token arrives */
+    if (opts.editMessageId) {
+      setMessages((m) => {
+        const i = m.findIndex((x) => x.id === opts.editMessageId);
+        return i === -1 ? m : m.slice(0, i + 1);
+      });
+    } else if (opts.regenerate) {
+      setMessages((m) => {
+        let k = m.length;
+        while (k > 0 && m[k - 1].role === "assistant") k--;
+        return k === m.length ? m : m.slice(0, k);
+      });
+    } else {
+      const userMsg: AIMsg = {
+        id: "local-" + Date.now(),
+        role: "user",
+        content: opts.text || "(files attached — please review them)",
+        attachments: opts.atts.length ? opts.atts : undefined,
+      };
+      setMessages((m) => [...m, userMsg]);
+    }
+    setMessages((m) => [...m, { id: "stream", role: "assistant", content: "", streaming: true }]);
     sendingRef.current = true;
 
     const controller = new AbortController();
@@ -637,11 +721,14 @@ export default function AiView() {
         body: JSON.stringify({
           sessionId: sid,
           conversationId: activeId,
-          message: text,
+          message: opts.text,
           instructions: instructionsDraft,
-          attachments: atts.map((a) => a.id),
+          attachments: opts.atts.map((a) => a.id),
           webSearch,
           imageMode,
+          mode,
+          ...(opts.regenerate ? { regenerate: true } : {}),
+          ...(opts.editMessageId ? { edit: { messageId: opts.editMessageId, text: opts.text } } : {}),
         }),
         signal: controller.signal,
       });
@@ -655,7 +742,10 @@ export default function AiView() {
       const decoder = new TextDecoder();
       let buffer = "";
       let acc = "";
+      let thinkAcc = "";
       let streamAtts: AttMeta[] | null = null;
+      let convId = activeId;
+      let finalId = "";
 
       for (;;) {
         const { done, value } = await reader.read();
@@ -675,9 +765,30 @@ export default function AiView() {
             continue;
           }
           if (event === "meta" && typeof payload.conversationId === "string") {
+            convId = payload.conversationId;
             setActiveId(payload.conversationId);
+            /* swap the optimistic local-… id for the persisted one so
+               edit / regenerate work before a reload */
+            if (typeof payload.userMessageId === "string") {
+              const realId = payload.userMessageId;
+              setMessages((ms) => {
+                for (let i = ms.length - 1; i >= 0; i--) {
+                  if (ms[i].role === "user" && ms[i].id.startsWith("local-")) {
+                    const next = [...ms];
+                    next[i] = { ...next[i], id: realId };
+                    return next;
+                  }
+                }
+                return ms;
+              });
+            }
           } else if (event === "status" && typeof payload.stage === "string") {
             setStatus(payload.stage);
+          } else if (event === "reasoning" && typeof payload.text === "string") {
+            thinkAcc += payload.text;
+            setMessages((m) =>
+              m.map((msg) => (msg.id === "stream" ? { ...msg, reasoning: thinkAcc } : msg))
+            );
           } else if (event === "delta" && typeof payload.text === "string") {
             acc += payload.text;
             setStatus("");
@@ -687,21 +798,45 @@ export default function AiView() {
           } else if (event === "error") {
             throw new Error(String(payload.message || "The model is unavailable."));
           } else if (event === "done") {
+            finalId = String(payload.messageId ?? "saved");
             if (Array.isArray(payload.attachments)) {
               streamAtts = payload.attachments as AttMeta[];
             }
+            const doneReasoning =
+              typeof payload.reasoning === "string" && payload.reasoning ? payload.reasoning : thinkAcc;
+            const doneMode = typeof payload.mode === "string" ? payload.mode : mode;
             setMessages((m) =>
               m.map((msg) =>
                 msg.id === "stream"
                   ? {
-                      id: String(payload.messageId ?? "saved"),
+                      id: finalId,
                       role: "assistant",
                       content: acc,
                       attachments: streamAtts ?? undefined,
+                      reasoning: doneReasoning || undefined,
+                      mode: doneMode,
                     }
                   : msg
               )
             );
+            /* follow-up suggestion chips for the fresh reply */
+            const suggestFor = finalId;
+            const suggestConv = (typeof payload.conversationId === "string"
+              ? payload.conversationId
+              : convId) as string | null;
+            if (suggestConv && !imageMode) {
+              void fetch("/api/ai/suggest", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ sessionId: sid, conversationId: suggestConv }),
+              })
+                .then((r) => r.json())
+                .then((d: { suggestions?: string[] }) => {
+                  if (Array.isArray(d.suggestions) && d.suggestions.length)
+                    setSuggestions({ forId: suggestFor, items: d.suggestions.slice(0, 3) });
+                })
+                .catch(() => { /* chips are optional */ });
+            }
           }
         }
       }
@@ -714,9 +849,14 @@ export default function AiView() {
       setMessages((m) =>
         m
           /* rename any orphaned stream placeholder so the next send
-             can't produce a duplicate React key */
-          .map((x) => (x.id === "stream" ? { ...x, id: "aborted-" + Date.now(), streaming: false } : x))
-          .filter((x) => x.role === "user" || x.content)
+             can't produce a duplicate React key; keep whatever partial
+             reply + thinking already streamed (Stop button) */
+          .map((x) =>
+            x.id === "stream"
+              ? { ...x, id: "aborted-" + Date.now(), streaming: false }
+              : x
+          )
+          .filter((x) => x.role === "user" || x.content || x.reasoning)
       );
     } finally {
       sendingRef.current = false;
@@ -724,6 +864,63 @@ export default function AiView() {
       setStatus("");
       abortRef.current = null;
     }
+  };
+
+  /* ---------- send (fresh or edit-resend) ---------- */
+  const send = async () => {
+    const text = input.trim();
+    const atts = attached;
+    if ((!text && !atts.length) || sending || uploading.length) return;
+    const editId = editing?.id ?? null;
+    setInput("");
+    setAttached([]);
+    setEditing(null);
+    await runTurn({ text, atts, editMessageId: editId });
+  };
+
+  /* ---------- stop generating (keeps the partial reply) ---------- */
+  const stop = () => {
+    abortRef.current?.abort();
+  };
+
+  /* ---------- regenerate the last reply ---------- */
+  const regenerate = async () => {
+    if (sending || !activeId) return;
+    await runTurn({ text: "", atts: [], regenerate: true });
+  };
+
+  /* ---------- edit an earlier user message ---------- */
+  const startEdit = (m: AIMsg) => {
+    if (sending) return;
+    setEditing({ id: m.id });
+    setInput(m.content === "(files attached — please review them)" ? "" : m.content);
+    setAttached(m.attachments ?? []);
+    setStatus("");
+    inputRef.current?.focus();
+  };
+
+  const cancelEdit = () => {
+    setEditing(null);
+    setInput("");
+    setAttached([]);
+  };
+
+  /* ---------- rename a conversation ---------- */
+  const commitRename = async (id: string) => {
+    const title = renameDraft.trim().slice(0, 60);
+    setRenaming(null);
+    if (!title) return;
+    setConversations((cs) => cs.map((c) => (c.id === id ? { ...c, title } : c)));
+    try {
+      await fetch(
+        `/api/ai/conversations/${id}?sessionId=${encodeURIComponent(aiSessionId())}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title }),
+        }
+      );
+    } catch { /* offline — next reload re-syncs */ }
   };
 
   const saveInstructions = async () => {
@@ -809,6 +1006,13 @@ export default function AiView() {
 
   /* ---------- render ---------- */
   const card = cards[cardIdx];
+  let lastAssistantIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant") {
+      lastAssistantIdx = i;
+      break;
+    }
+  }
   const busyLabel =
     status && STATUS_LABEL[status]
       ? STATUS_LABEL[status]
@@ -873,26 +1077,61 @@ export default function AiView() {
           )}
           {conversations.map((c) => (
             <div key={c.id} className="group flex items-center">
-              <button
-                onClick={() => {
-                  setActiveId(c.id);
-                  setSidebarOpen(false);
-                }}
-                className={`flex-1 text-left px-2 py-1.5 rounded-md text-[13px] truncate transition-colors ${
-                  activeId === c.id
-                    ? "bg-[#141414] text-white"
-                    : "text-[#9a9a9a] hover:bg-[#0d0d0d] hover:text-white"
-                }`}
-              >
-                {c.title}
-              </button>
-              <button
-                onClick={() => void deleteConversation(c.id)}
-                aria-label={`Delete ${c.title}`}
-                className="opacity-0 group-hover:opacity-100 p-1.5 text-[#666] hover:text-white"
-              >
-                <Trash2 className="size-3.5" />
-              </button>
+              {renaming === c.id ? (
+                <input
+                  autoFocus
+                  value={renameDraft}
+                  onChange={(e) => setRenameDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void commitRename(c.id);
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setRenaming(null);
+                    }
+                  }}
+                  onBlur={() => void commitRename(c.id)}
+                  maxLength={60}
+                  aria-label="Rename chat"
+                  className="flex-1 min-w-0 px-2 py-1.5 rounded-md bg-[#141414] border border-[#333] text-[13px] text-white outline-none focus:border-[#555]"
+                />
+              ) : (
+                <>
+                  <button
+                    onClick={() => {
+                      setActiveId(c.id);
+                      setSidebarOpen(false);
+                    }}
+                    className={`flex-1 text-left px-2 py-1.5 rounded-md text-[13px] truncate transition-colors ${
+                      activeId === c.id
+                        ? "bg-[#141414] text-white"
+                        : "text-[#9a9a9a] hover:bg-[#0d0d0d] hover:text-white"
+                    }`}
+                  >
+                    {c.title}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setRenaming(c.id);
+                      setRenameDraft(c.title);
+                    }}
+                    aria-label={`Rename ${c.title}`}
+                    title="Rename chat"
+                    className="opacity-0 group-hover:opacity-100 p-1.5 text-[#666] hover:text-white"
+                  >
+                    <Pencil className="size-3.5" />
+                  </button>
+                  <button
+                    onClick={() => void deleteConversation(c.id)}
+                    aria-label={`Delete ${c.title}`}
+                    className="opacity-0 group-hover:opacity-100 p-1.5 text-[#666] hover:text-white"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </>
+              )}
             </div>
           ))}
         </div>
@@ -917,7 +1156,7 @@ export default function AiView() {
           <Sparkles className="size-4 text-white" />
           <h1 className="text-sm font-semibold text-white">Memphis AI</h1>
           <span className="text-[11px] text-[#555] hidden lg:inline">
-            files · vision · voice · search · images
+            files · vision · voice · search · images · reasoning
           </span>
           <div className="ml-auto flex items-center gap-2">
             {messages.length > 0 && (
@@ -974,13 +1213,14 @@ export default function AiView() {
                   <span className="inline-flex items-center gap-1"><Mic className="size-3" /> voice</span>
                   <span className="inline-flex items-center gap-1"><Globe className="size-3" /> web search</span>
                   <span className="inline-flex items-center gap-1"><Palette className="size-3" /> images</span>
+                  <span className="inline-flex items-center gap-1"><Brain className="size-3" /> reasoning</span>
                 </div>
                 <div className="mt-6 grid sm:grid-cols-2 gap-2 text-left">
                   {[
                     "Summarize a PDF — attach it below",
                     "Search the web for today's tech news",
                     "Generate an image of a neon city at night",
-                    "Give me a 20-minute full-body workout plan",
+                    "Explain the Monty Hall problem step by step",
                   ].map((s) => (
                     <button
                       key={s}
@@ -993,7 +1233,7 @@ export default function AiView() {
                 </div>
               </div>
             )}
-            {messages.map((m) => (
+            {messages.map((m, idx) => (
               <div
                 key={m.id}
                 className={m.role === "user" ? "flex justify-end" : "flex"}
@@ -1017,25 +1257,53 @@ export default function AiView() {
                       <p className="text-[13.5px] leading-relaxed whitespace-pre-wrap break-words">
                         {m.content}
                       </p>
+                      {!sending && !m.id.startsWith("local-") && editing?.id !== m.id && (
+                        <button
+                          onClick={() => startEdit(m)}
+                          aria-label="Edit and resend"
+                          title="Edit & resend"
+                          className="absolute -bottom-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity bg-[#161616] border border-[#262626] rounded p-1 text-[#888] hover:text-white"
+                        >
+                          <Pencil className="size-3" />
+                        </button>
+                      )}
                     </>
                   ) : m.content ? (
-                    <Md text={m.content} />
+                    <>
+                      {m.reasoning ? (
+                        <ThinkBlock text={m.reasoning} streaming={m.streaming} />
+                      ) : null}
+                      <Md text={m.content} />
+                    </>
                   ) : (
-                    <span className="flex items-center gap-1.5 text-[13px] text-[#777]">
-                      <span className="boot-pulse">{busyLabel || "thinking"}</span>
-                      <span className="flex gap-0.5">
-                        {[0, 1, 2].map((i) => (
-                          <span
-                            key={i}
-                            className="size-1 rounded-full bg-[#777]"
-                            style={{ animation: `blink 1.2s ${i * 0.2}s infinite` }}
-                          />
-                        ))}
+                    <>
+                      {m.reasoning ? <ThinkBlock text={m.reasoning} streaming /> : null}
+                      <span className="flex items-center gap-1.5 text-[13px] text-[#777]">
+                        <span className="boot-pulse">{busyLabel || "thinking"}</span>
+                        <span className="flex gap-0.5">
+                          {[0, 1, 2].map((i) => (
+                            <span
+                              key={i}
+                              className="size-1 rounded-full bg-[#777]"
+                              style={{ animation: `blink 1.2s ${i * 0.2}s infinite` }}
+                            />
+                          ))}
+                        </span>
                       </span>
-                    </span>
+                    </>
                   )}
                   {m.role === "assistant" && m.content && !m.streaming && (
-                    <div className="absolute -bottom-2 right-2 flex gap-0.5">
+                    <div className="absolute -bottom-2 right-2 z-10 flex gap-0.5">
+                      {idx === lastAssistantIdx && !sending && (
+                        <button
+                          onClick={() => void regenerate()}
+                          aria-label="Regenerate reply"
+                          title="Regenerate"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity bg-[#161616] border border-[#262626] rounded p-1 text-[#888] hover:text-white"
+                        >
+                          <RotateCcw className="size-3" />
+                        </button>
+                      )}
                       <button
                         onClick={() => void speak(m)}
                         aria-label={speaking?.id === m.id ? "Stop reading aloud" : "Read aloud"}
@@ -1067,6 +1335,27 @@ export default function AiView() {
                 </div>
               </div>
             ))}
+            {/* follow-up suggestion chips for the latest reply */}
+            {suggestions &&
+              suggestions.items.length > 0 &&
+              !sending &&
+              messages[messages.length - 1]?.id === suggestions.forId && (
+                <div className="flex flex-col sm:flex-row sm:flex-wrap gap-1.5 pt-1">
+                  {suggestions.items.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => {
+                        setInput(s);
+                        inputRef.current?.focus();
+                      }}
+                      className="text-left text-[12.5px] text-[#b5b5b5] border border-[#1e1e1e] bg-[#0a0a0a] rounded-lg px-2.5 py-1.5 hover:border-[#3a3a3a] hover:text-white transition-colors inline-flex items-center gap-1.5 max-w-full"
+                    >
+                      <CornerDownRight className="size-3 shrink-0 text-[#666]" />
+                      <span className="truncate">{s}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             <div ref={bottomRef} />
           </div>
         </div>
@@ -1097,6 +1386,23 @@ export default function AiView() {
                 dragging ? "border-white/60" : "border-[#1f1f1f] focus-within:border-[#333]"
               }`}
             >
+              {/* edit-mode banner */}
+              {editing && (
+                <div className="flex items-center gap-2 px-3 pt-3">
+                  <span className="inline-flex items-center gap-1.5 text-[11.5px] text-[#ddd] bg-[#161616] border border-[#333] rounded-md px-2 py-1">
+                    <Pencil className="size-3" /> Editing message
+                  </span>
+                  <span className="text-[11.5px] text-[#777]">Enter to resend · Esc to cancel</span>
+                  <button
+                    onClick={cancelEdit}
+                    aria-label="Cancel edit"
+                    className="ml-auto p-1 text-[#888] hover:text-white"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </div>
+              )}
+
               {/* upload progress chips */}
               {uploading.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 px-3 pt-3">
@@ -1127,12 +1433,17 @@ export default function AiView() {
               )}
 
               <Textarea
+                ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     void send();
+                  }
+                  if (e.key === "Escape" && editing) {
+                    e.preventDefault();
+                    cancelEdit();
                   }
                 }}
                 onPaste={onPaste}
@@ -1168,6 +1479,38 @@ export default function AiView() {
                 >
                   <Paperclip className="size-4" />
                 </button>
+
+                {/* Fast / Reasoning mode */}
+                <div
+                  role="group"
+                  aria-label="Reply mode"
+                  className="inline-flex items-center rounded-lg border border-[#262626] overflow-hidden"
+                >
+                  <button
+                    onClick={() => setModePersisted("fast")}
+                    aria-pressed={mode === "fast"}
+                    title="Fast — quick, direct answers"
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[12px] transition-colors ${
+                      mode === "fast"
+                        ? "bg-white text-black"
+                        : "text-[#999] hover:text-white hover:bg-[#161616]"
+                    }`}
+                  >
+                    <Zap className="size-3.5" /> Fast
+                  </button>
+                  <button
+                    onClick={() => setModePersisted("reasoning")}
+                    aria-pressed={mode === "reasoning"}
+                    title="Reasoning — thinks step by step before answering"
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[12px] border-l border-[#262626] transition-colors ${
+                      mode === "reasoning"
+                        ? "bg-white text-black"
+                        : "text-[#999] hover:text-white hover:bg-[#161616]"
+                    }`}
+                  >
+                    <Brain className="size-3.5" /> Reasoning
+                  </button>
+                </div>
 
                 <button
                   onClick={() => {
@@ -1227,12 +1570,17 @@ export default function AiView() {
                     {recording ? <Square className="size-4" /> : <Mic className="size-4" />}
                   </button>
                   <Button
-                    onClick={() => void send()}
-                    disabled={(!input.trim() && !attached.length) || sending || uploading.length > 0}
+                    onClick={() => (sending ? stop() : void send())}
+                    disabled={(!sending && (!input.trim() && !attached.length)) || uploading.length > 0}
                     className="bg-white text-black hover:bg-[#e0e0e0] size-9 p-0 rounded-lg"
-                    aria-label="Send message"
+                    aria-label={sending ? "Stop generating" : "Send message"}
+                    title={sending ? "Stop — keep what arrived" : "Send"}
                   >
-                    {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                    {sending ? (
+                      <Square className="size-4 fill-current" />
+                    ) : (
+                      <Send className="size-4" />
+                    )}
                   </Button>
                 </div>
               </div>

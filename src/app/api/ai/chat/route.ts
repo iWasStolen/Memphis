@@ -15,7 +15,13 @@ export const dynamic = "force-dynamic";
        · live vision on attached images (createVision)
        · web search with citations (planner → web_search → page_reader)
        · image generation / editing (images.generations)
+       · Fast / Reasoning modes (thinking enabled streams a private
+         chain-of-thought as `reasoning` events before the answer)
+       · regenerate (replay the last user turn) and edit (rewrite a
+         user turn, truncate everything after it, replay)
    - Streams the reply over SSE with status events, then persists.
+     Client aborts (Stop button) don't lose the reply: enqueues are
+     swallowed after cancel and the answer is still saved.
    ------------------------------------------------------------ */
 
 const SYSTEM_BASE = `You are Memphis AI — a sharp, friendly, general-purpose assistant built into the Memphis unBLACKed web app.
@@ -27,6 +33,12 @@ Guidelines:
 - Match the user's language and tone.
 - The user can attach files of ANY type. Their contents arrive as [attached file: …] blocks — extracted text, spreadsheets, transcriptions, or visual descriptions. Treat those blocks as the source of truth for questions about the files. Quote specifics (numbers, names, lines) when answering. If the answer isn't in the file, say so plainly instead of guessing.`;
 
+const REASONING_HINT = `
+
+REASONING MODE is ON for this reply: your private reasoning notes are appended to the user's message between [your private reasoning notes] and [end notes] markers. Use them to produce a rigorous, well-structured final answer that shows the key steps and justification — but never mention, quote or repeat the notes themselves.`;
+
+const THINKING_SYSTEM = `You are the private thinking phase of Memphis AI. Think through the user's request and write concise working notes for yourself: restate the goal, pull out key facts and constraints, consider approaches, check traps and edge cases, then settle on a plan. First person, telegraphic style, no markdown headings, no greeting, no final polished answer — a separate final answer is written afterwards from your notes. Keep it under 200 words.`;
+
 const MAX_MESSAGE = 8000;
 const HISTORY_TURNS = 30; /* messages of context (bounded, not limited per day) */
 const MAX_ATTACHMENTS = 6;
@@ -34,6 +46,7 @@ const CURRENT_FILE_BUDGET = 20_000; /* chars per file, current turn */
 const CURRENT_TOTAL_BUDGET = 60_000;
 const HISTORY_FILE_BUDGET = 1_200; /* chars per file inside older turns */
 const HISTORY_TOTAL_BUDGET = 8_000;
+const MAX_REASONING_STORED = 24_000; /* chars of chain-of-thought kept per reply */
 
 interface AttMeta {
   id: string;
@@ -67,6 +80,84 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+/* Pump a z-ai completion (raw SSE bytes, strings, or parsed chunk
+   objects), collecting and forwarding reasoning_content + content.
+   Returns everything the call produced. */
+async function pumpStream(
+  completion: unknown,
+  onReasoning: (t: string) => void,
+  onDelta: (t: string) => void
+): Promise<{ content: string; reasoning: string }> {
+  const decoder = new TextDecoder();
+  let rawBuf = "";
+  let content = "";
+  let reasoning = "";
+
+  const handleObj = (obj: {
+    choices?: {
+      delta?: { content?: string; reasoning_content?: string };
+      message?: { content?: string; reasoning_content?: string };
+    }[];
+  }) => {
+    const thinkDelta =
+      obj?.choices?.[0]?.delta?.reasoning_content ??
+      obj?.choices?.[0]?.message?.reasoning_content ??
+      "";
+    if (thinkDelta) {
+      reasoning += thinkDelta;
+      onReasoning(thinkDelta);
+    }
+    const delta =
+      obj?.choices?.[0]?.delta?.content ??
+      obj?.choices?.[0]?.message?.content ??
+      "";
+    if (delta) {
+      content += delta;
+      onDelta(delta);
+    }
+  };
+
+  const consumeLine = (line: string) => {
+    const t = line.trim();
+    if (!t.startsWith("data:")) return;
+    const payload = t.slice(5).trim();
+    if (!payload || payload === "[DONE]") return;
+    try {
+      handleObj(JSON.parse(payload));
+    } catch {
+      /* partial json — ignore */
+    }
+  };
+
+  const consumeBuf = () => {
+    const lines = rawBuf.split("\n");
+    rawBuf = lines.pop() ?? "";
+    for (const line of lines) consumeLine(line);
+  };
+
+  const iterable = completion as AsyncIterable<unknown> | null;
+  if (iterable && typeof iterable[Symbol.asyncIterator] === "function") {
+    for await (const chunk of iterable) {
+      if (chunk instanceof Uint8Array) {
+        rawBuf += decoder.decode(chunk, { stream: true });
+        consumeBuf();
+      } else if (typeof chunk === "string") {
+        rawBuf += chunk;
+        consumeBuf();
+      } else if (chunk && typeof chunk === "object") {
+        handleObj(chunk as Parameters<typeof handleObj>[0]);
+      }
+    }
+    rawBuf += decoder.decode();
+    consumeBuf();
+  } else {
+    handleObj(
+      (completion as { choices?: { message?: { content?: string; reasoning_content?: string } }[] }) ?? {}
+    );
+  }
+  return { content, reasoning };
+}
+
 export async function POST(req: Request) {
   let body: {
     sessionId?: string;
@@ -76,6 +167,9 @@ export async function POST(req: Request) {
     attachments?: unknown;
     webSearch?: boolean;
     imageMode?: boolean;
+    mode?: string;
+    regenerate?: boolean;
+    edit?: { messageId?: string; text?: string } | null;
   };
   try {
     body = await req.json();
@@ -83,37 +177,114 @@ export async function POST(req: Request) {
     return Response.json({ error: "Invalid request" }, { status: 400 });
   }
 
+  const mode = body.mode === "reasoning" ? "reasoning" : "fast";
+  const regenerate = body.regenerate === true;
+  const edit =
+    body.edit && typeof body.edit === "object" && typeof body.edit.messageId === "string"
+      ? body.edit
+      : null;
+  const replay = regenerate || !!edit; /* both reuse a stored user turn */
+
   const message = (body.message ?? "").trim().slice(0, MAX_MESSAGE);
   const attachmentIds = Array.isArray(body.attachments)
     ? body.attachments.filter((x): x is string => typeof x === "string").slice(0, MAX_ATTACHMENTS)
     : [];
-  if (!message && !attachmentIds.length)
+  if (!message && !attachmentIds.length && !replay)
     return Response.json({ error: "Empty message" }, { status: 400 });
   if (!validSessionId(body.sessionId))
     return Response.json({ error: "Invalid session" }, { status: 400 });
+  if (replay && !body.conversationId)
+    return Response.json({ error: "No conversation to replay" }, { status: 400 });
 
   const sessionId = body.sessionId;
   const instructions = (body.instructions ?? "").slice(0, 1000);
   const webSearch = body.webSearch === true;
   const imageMode = body.imageMode === true;
 
-  /* load attachment records (ownership-enforced) */
-  const currentFiles = attachmentIds.length
-    ? await db.aIFile.findMany({ where: { id: { in: attachmentIds }, sessionId } })
-    : [];
-  const filesById = new Map(currentFiles.map((f) => [f.id, f]));
-  const orderedFiles = attachmentIds.map((id) => filesById.get(id)).filter(Boolean) as typeof currentFiles;
-
-  const firstFileName = orderedFiles[0]?.name;
-  const titleSource = message || (firstFileName ? `Files: ${firstFileName}${orderedFiles.length > 1 ? ` +${orderedFiles.length - 1}` : ""}` : "New chat");
-
-  /* find or create the conversation */
+  /* find the conversation (replay paths require an existing one) */
   let conversation = body.conversationId
     ? await db.aIConversation.findFirst({
         where: { id: body.conversationId, sessionId },
       })
     : null;
+  if (!conversation && replay)
+    return Response.json({ error: "Conversation not found" }, { status: 400 });
 
+  /* ------------------------------------------------------------
+     Resolve the user turn this request answers:
+       · normal     → the message + attachments from the body
+       · regenerate → the newest stored user message (replayed)
+       · edit       → that message rewritten, everything after it dropped
+     ------------------------------------------------------------ */
+  let turnText = message;
+  let turnAttIds = attachmentIds;
+  let turnCreatedAt: Date | null = null; /* history is strictly older than this */
+  let editMsgId: string | null = null;
+  let editReplacesAtts = false; /* edit: rewrite the message's attachment chip list */
+
+  if (edit) {
+    const msg = await db.aIMessage.findFirst({
+      where: { id: edit.messageId, conversationId: conversation!.id, role: "user" },
+    });
+    if (!msg) return Response.json({ error: "Message not found" }, { status: 400 });
+    turnText = String(edit.text ?? "").trim().slice(0, MAX_MESSAGE);
+    turnAttIds = attachmentIds;
+    /* when the client sends an attachments array it replaces the old chip set */
+    editReplacesAtts = Array.isArray(body.attachments);
+    if (!turnText && !(editReplacesAtts ? turnAttIds.length : (msg.attachments as AttMeta[] | null)?.length))
+      return Response.json({ error: "Empty message" }, { status: 400 });
+    await db.aIMessage.update({
+      where: { id: msg.id },
+      data: {
+        content: turnText || "(files attached — please review them)",
+      },
+    });
+    /* drop every message after the edited one (assistant replies etc.) */
+    await db.aIMessage.deleteMany({
+      where: { conversationId: conversation!.id, createdAt: { gt: msg.createdAt } },
+    });
+    editMsgId = msg.id;
+    turnCreatedAt = msg.createdAt;
+  } else if (regenerate) {
+    const lastUser = await db.aIMessage.findFirst({
+      where: { conversationId: conversation!.id, role: "user" },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!lastUser) return Response.json({ error: "Nothing to regenerate" }, { status: 400 });
+    turnText = lastUser.content;
+    const atts = Array.isArray(lastUser.attachments) ? (lastUser.attachments as unknown as AttMeta[]) : [];
+    turnAttIds = atts.map((a) => a?.id).filter((id): id is string => typeof id === "string");
+    /* drop the stale assistant reply(ies) after it */
+    await db.aIMessage.deleteMany({
+      where: { conversationId: conversation!.id, role: "assistant", createdAt: { gt: lastUser.createdAt } },
+    });
+    turnCreatedAt = lastUser.createdAt;
+  }
+
+  /* load the turn's attachment records (ownership-enforced) */
+  const currentFiles = turnAttIds.length
+    ? await db.aIFile.findMany({ where: { id: { in: turnAttIds }, sessionId } })
+    : [];
+  const filesById = new Map(currentFiles.map((f) => [f.id, f]));
+  const orderedFiles = turnAttIds.map((id) => filesById.get(id)).filter(Boolean) as typeof currentFiles;
+
+  /* edit: now that the surviving files are known, rewrite the chip list */
+  if (editMsgId) {
+    await db.aIMessage.update({
+      where: { id: editMsgId },
+      data: {
+        ...(editReplacesAtts
+          ? { attachments: orderedFiles.length ? JSON.parse(JSON.stringify(attMetas(orderedFiles))) : null }
+          : {}),
+      },
+    });
+  }
+
+  const firstFileName = orderedFiles[0]?.name;
+  const titleSource =
+    turnText || (firstFileName ? `Files: ${firstFileName}${orderedFiles.length > 1 ? ` +${orderedFiles.length - 1}` : ""}` : "New chat");
+
+  /* create the conversation for fresh chats (replay paths already have one) */
   if (!conversation) {
     conversation = await db.aIConversation.create({
       data: {
@@ -131,11 +302,14 @@ export async function POST(req: Request) {
 
   const conversationId = conversation.id;
 
-  /* recent history for context — take the NEWEST N messages
-     (desc + take), then restore chronological order for the model */
+  /* recent history for context — take the NEWEST N messages strictly
+     before this turn (desc + take), then restore chronological order */
   const history = (
     await db.aIMessage.findMany({
-      where: { conversationId },
+      where: {
+        conversationId,
+        ...(turnCreatedAt ? { createdAt: { lt: turnCreatedAt } } : {}),
+      },
       orderBy: { createdAt: "desc" },
       take: HISTORY_TURNS,
     })
@@ -175,15 +349,20 @@ export async function POST(req: Request) {
     };
   });
 
-  /* persist the user's message (raw text + attachment metas) */
-  await db.aIMessage.create({
-    data: {
-      conversationId,
-      role: "user",
-      content: message || "(files attached — please review them)",
-      attachments: orderedFiles.length ? JSON.parse(JSON.stringify(attMetas(orderedFiles))) : undefined,
-    },
-  });
+  /* persist the user's message — only for fresh turns; replay paths
+     reuse the stored one */
+  let userMessageId: string | null = null;
+  if (!replay) {
+    const savedUser = await db.aIMessage.create({
+      data: {
+        conversationId,
+        role: "user",
+        content: message || "(files attached — please review them)",
+        attachments: orderedFiles.length ? JSON.parse(JSON.stringify(attMetas(orderedFiles))) : undefined,
+      },
+    });
+    userMessageId = savedUser.id;
+  }
 
   /* tie the files to this conversation */
   if (orderedFiles.length) {
@@ -193,9 +372,10 @@ export async function POST(req: Request) {
     });
   }
 
-  const systemMsg = instructions.trim()
-    ? `${SYSTEM_BASE}\n\nThe user's custom instructions: ${instructions.trim()}`
-    : SYSTEM_BASE;
+  const systemMsg =
+    (instructions.trim()
+      ? `${SYSTEM_BASE}\n\nThe user's custom instructions: ${instructions.trim()}`
+      : SYSTEM_BASE) + (mode === "reasoning" ? REASONING_HINT : "");
 
   /* what the model sees for the current turn */
   const fileBlocks: string[] = [];
@@ -207,30 +387,48 @@ export async function POST(req: Request) {
     fileBlocks.push(block);
   }
   const currentImages = orderedFiles.filter((f) => f.kind === "image" && f.mime !== "image/svg+xml");
-  const promptText = [fileBlocks.join("\n\n"), message].filter(Boolean).join("\n\n") || "(files attached — please review them)";
+  const promptText = [fileBlocks.join("\n\n"), turnText].filter(Boolean).join("\n\n") || "(files attached — please review them)";
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      /* enqueue() throws once the client aborts (Stop button) — swallow
+         those errors and keep generating so the reply is still persisted */
+      let closed = false;
       const send = (event: string, data: unknown) => {
-        controller.enqueue(
-          encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-        );
+        if (closed) return;
+        try {
+          controller.enqueue(
+            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+          );
+        } catch {
+          closed = true;
+        }
+      };
+      const finish = () => {
+        if (closed) return;
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
       };
 
-      send("meta", { conversationId });
+      send("meta", { conversationId, userMessageId });
 
       let reply = "";
+      let think = "";
       let assistantAtts: AttMeta[] | null = null;
 
       try {
         const { default: ZAI } = await import("z-ai-web-dev-sdk");
         const zai = await ZAI.create();
+        const thinkingCfg = { type: mode === "reasoning" ? ("enabled" as const) : ("disabled" as const) };
 
         /* ============ IMAGE MODE — generate / edit a picture ============ */
         if (imageMode) {
           send("status", { stage: "painting" });
-          const prompt = message || "a striking, beautiful image";
+          const prompt = turnText || "a striking, beautiful image";
           const editSource = currentImages[0];
           let b64 = "";
           let genNote = "";
@@ -254,12 +452,12 @@ export async function POST(req: Request) {
             send("error", {
               message: `Image generation failed (${e instanceof Error ? e.message : "unknown error"}). Try rephrasing.`,
             });
-            controller.close();
+            finish();
             return;
           }
           if (!b64) {
             send("error", { message: "Image generation returned nothing — try again." });
-            controller.close();
+            finish();
             return;
           }
 
@@ -323,7 +521,7 @@ export async function POST(req: Request) {
                   },
                   {
                     role: "user",
-                    content: `Recent conversation:\n${historyText}\n\nQuestion: ${message}`,
+                    content: `Recent conversation:\n${historyText}\n\nQuestion: ${turnText}`,
                   },
                 ],
                 thinking: { type: "disabled" },
@@ -335,7 +533,7 @@ export async function POST(req: Request) {
                     (q): q is string => typeof q === "string" && q.trim().length > 1
                   ).slice(0, 3)
                 : [];
-              if (!queries.length) queries.push(message.slice(0, 100));
+              if (!queries.length) queries.push(turnText.slice(0, 100));
 
               const allResults: { url: string; name: string; snippet: string; host: string; date: string }[] = [];
               const seen = new Set<string>();
@@ -380,12 +578,45 @@ export async function POST(req: Request) {
             }
           }
 
+          /* ============ PHASE 1 (Reasoning mode) — visible private thinking ============
+             The z-ai endpoint has no native reasoning_content channel, so
+             Reasoning mode runs a dedicated thinking call first: short
+             working notes streamed live into the UI's thinking box, then
+             fed to the final-answer call below. */
+          if (mode === "reasoning") {
+            send("status", { stage: "reasoning" });
+            try {
+              const thinkRes = await pumpStream(
+                await zai.chat.completions.create({
+                  messages: [
+                    { role: "system" as const, content: THINKING_SYSTEM },
+                    { role: "user" as const, content: promptText + searchContext },
+                  ],
+                  max_tokens: 500,
+                  thinking: { type: "disabled" },
+                  stream: true,
+                }),
+                (t) => send("reasoning", { text: t }),
+                (t) => send("reasoning", { text: t })
+              );
+              think = [thinkRes.reasoning, thinkRes.content].filter(Boolean).join("\n").trim();
+            } catch {
+              /* thinking phase failed — fall through and answer directly */
+            }
+          }
+
+          /* ============ PHASE 2 — the final answer ============ */
           send("status", { stage: "writing" });
 
           const sys = systemMsg +
             (searchContext
               ? `\n\nWEB SEARCH MODE: fresh search results are appended below. Ground your answer in them, cite sources inline as markdown links like [source](url), and end with a "Sources" list of the links you used. If the results don't fully answer the question, say what's missing.`
               : "");
+
+          const finalUserContent =
+            mode === "reasoning" && think
+              ? `${promptText + searchContext}\n\n[your private reasoning notes]\n${think}\n[end notes — write the final answer now; do not repeat the notes]`
+              : promptText + searchContext;
 
           const messages = [
             { role: "system" as const, content: sys },
@@ -394,7 +625,7 @@ export async function POST(req: Request) {
 
           /* live vision when images are attached to THIS turn */
           if (currentImages.length) {
-            const parts: unknown[] = [{ type: "text", text: promptText + searchContext }];
+            const parts: unknown[] = [{ type: "text", text: finalUserContent }];
             for (const img of currentImages) {
               try {
                 const buf = await readFile(img.path);
@@ -406,7 +637,7 @@ export async function POST(req: Request) {
             }
             messages.push({ role: "user" as const, content: parts as never });
           } else {
-            messages.push({ role: "user" as const, content: promptText + searchContext });
+            messages.push({ role: "user" as const, content: finalUserContent });
           }
 
           const completion =
@@ -414,82 +645,21 @@ export async function POST(req: Request) {
               ? await zai.chat.completions.createVision({
                   messages: messages as never,
                   stream: true,
-                  thinking: { type: "disabled" },
+                  thinking: thinkingCfg,
                 } as never)
               : await zai.chat.completions.create({
                   messages,
-                  thinking: { type: "disabled" },
+                  thinking: thinkingCfg,
                   stream: true,
                 });
 
-          const decoder = new TextDecoder();
-          let rawBuf = "";
-
-          /* the sdk yields raw SSE bytes: data: {"choices":[{"delta":{"content":..}}]} */
-          const consumeLine = (line: string) => {
-            const t = line.trim();
-            if (!t.startsWith("data:")) return;
-            const payload = t.slice(5).trim();
-            if (!payload || payload === "[DONE]") return;
-            try {
-              const obj = JSON.parse(payload) as {
-                choices?: { delta?: { content?: string }; message?: { content?: string } }[];
-              };
-              const delta =
-                obj?.choices?.[0]?.delta?.content ??
-                obj?.choices?.[0]?.message?.content ??
-                "";
-              if (delta) {
-                reply += delta;
-                send("delta", { text: delta });
-              }
-            } catch {
-              /* partial json — ignore */
-            }
-          };
-
-          const consumeBuf = () => {
-            const lines = rawBuf.split("\n");
-            rawBuf = lines.pop() ?? "";
-            for (const line of lines) consumeLine(line);
-          };
-
-          const iterable = completion as AsyncIterable<unknown> | null;
-          if (iterable && typeof (iterable as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function") {
-            for await (const chunk of iterable) {
-              if (chunk instanceof Uint8Array) {
-                rawBuf += decoder.decode(chunk, { stream: true });
-                consumeBuf();
-              } else if (typeof chunk === "string") {
-                rawBuf += chunk;
-                consumeBuf();
-              } else if (chunk && typeof chunk === "object") {
-                /* already-parsed chunk objects */
-                const obj = chunk as {
-                  choices?: { delta?: { content?: string }; message?: { content?: string } }[];
-                };
-                const delta =
-                  obj?.choices?.[0]?.delta?.content ??
-                  obj?.choices?.[0]?.message?.content ??
-                  "";
-                if (delta) {
-                  reply += delta;
-                  send("delta", { text: delta });
-                }
-              }
-            }
-            rawBuf += decoder.decode();
-            consumeBuf();
-          } else {
-            /* non-streaming fallback */
-            const text =
-              (completion as { choices?: { message?: { content?: string } }[] })?.choices?.[0]
-                ?.message?.content ?? "";
-            if (text) {
-              reply = text;
-              send("delta", { text });
-            }
-          }
+          const res = await pumpStream(
+            completion,
+            (t) => send("reasoning", { text: t }),
+            (t) => send("delta", { text: t })
+          );
+          reply = res.content;
+          if (res.reasoning) think = think ? `${think}\n${res.reasoning}` : res.reasoning;
         }
 
         if (!reply.trim()) {
@@ -503,16 +673,19 @@ export async function POST(req: Request) {
               ? `The model is unavailable right now (${err.message}). Try again.`
               : "The model is unavailable right now. Try again.",
         });
-        controller.close();
+        finish();
         return;
       }
 
-      /* persist the assistant reply */
+      /* persist the assistant reply (also when the client stopped
+         mid-stream — whatever arrived is kept) */
       const saved = await db.aIMessage.create({
         data: {
           conversationId,
           role: "assistant",
           content: reply,
+          mode,
+          ...(think ? { reasoning: think.slice(0, MAX_REASONING_STORED) } : {}),
           ...(assistantAtts ? { attachments: JSON.parse(JSON.stringify(assistantAtts)) } : {}),
         },
       });
@@ -525,9 +698,11 @@ export async function POST(req: Request) {
         messageId: saved.id,
         conversationId,
         title: conversation.title,
+        mode,
+        ...(think ? { reasoning: think.slice(0, MAX_REASONING_STORED) } : {}),
         ...(assistantAtts ? { attachments: assistantAtts } : {}),
       });
-      controller.close();
+      finish();
     },
   });
 

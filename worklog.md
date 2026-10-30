@@ -308,3 +308,34 @@ Stage Summary:
 
 Stage Summary:
 - Memphis AI went from text-only chat to a full toolbox: any-type file understanding (12 extraction strategies), live vision, cited web search, image generation/editing, voice in/out, and chat export — all session-scoped and verified in both dev and production standalone modes.
+
+## Memphis AI: Fast/Reasoning + chat power tools session (2026-10-30, later)
+
+- User request: "Yes add those, plus add Fast and Reasoning options" — the follow-up feature batch for Memphis AI plus explicit Fast/Reasoning model modes.
+- Schema: AIMessage += `reasoning String?` (chain-of-thought) + `mode String?` (fast | reasoning); db pushed.
+- /api/ai/chat reworked:
+  * `mode` param — Fast (single direct call) vs Reasoning (two-phase: thinking call then answer call).
+  * KEY DISCOVERY (probed with scripts/probe-thinking.mjs): the z-ai endpoint (glm-4-plus, `model` param is ignored server-side) NEVER returns a `reasoning_content` channel, even with `thinking: {type: "enabled"}` — that flag only changes inline behavior. So Reasoning mode is implemented as a genuine two-phase call: phase 1 streams concise private working notes (THINKING_SYSTEM prompt, max_tokens 500) as new `reasoning` SSE events; phase 2 writes the final answer with the notes injected as [your private reasoning notes] context (REASONING_HINT tells it to use, never repeat, them). pumpStream() helper (module-level) parses raw SSE/objects for both reasoning_content (forward-compat) and content across both phases.
+  * `regenerate: true` — replays the newest stored user turn: deletes assistant rows after it, history strictly before it (createdAt lt), no new user row.
+  * `edit: { messageId, text }` — rewrites that user message (attachments array replaces the chip list), deletes everything after it, replays. Enables edit-and-resend.
+  * meta event now carries `userMessageId` so the client can swap its optimistic local-… id for the real one → edit/regenerate work immediately after a send, before reload.
+  * Abort-safe persistence: enqueue() after client cancel no longer throws through — `send()` is no-throw with a closed flag and `finish()` wraps close(), so the Stop button aborts the stream but the server still finishes generating and persists whatever it produced (verified: 8,387-char reply + 1,410-char reasoning saved after stop).
+  * done event carries `mode` + `reasoning`; assistant rows persist both (reasoning clamped to 24k chars).
+- New /api/ai/suggest: reads the last exchange, one small call → 3 short follow-up chips; returns [] on any failure (chips are optional, never nags).
+- ai-view.tsx:
+  * Fast/Reasoning segmented toggle (Zap/Brain) in the composer toolbar, persisted in localStorage (memphis-ai-mode).
+  * ThinkBlock component — live "thinking…" box (pulse dots, max-h scroll) while streaming, collapsed "show thinking" <details> after; renders on history reload too (from AIMessage.reasoning).
+  * Send button becomes Stop (filled square) while streaming — aborts, keeps the partial reply, composer resets.
+  * Regenerate (RotateCcw) on the last assistant message; Edit-and-resend (Pencil) on user messages → editing banner + prefilled text/attachments + Esc to cancel; both go through the server replay paths (no duplicate rows).
+  * Inline rename in the sidebar (Pencil → input, Enter/Esc/blur) via existing PATCH title support.
+  * Follow-up chips under the latest reply (click fills input); cleared on send/switch/new chat.
+  * Hover action buttons got z-10 (they sit at -bottom-2 and could be covered by the next message row); copy updates (header strip, empty-state chips + new Monty Hall suggestion card).
+- VERIFIED (agent-browser via :81 + curl SSE probes + direct DB checks): reasoning streams live (bat/ball trap solved correctly in the thinking box), collapses to "show thinking", persists (541 chars) and reloads; regenerate re-thinks with fresh notes and replaces the old row; edit-resend updates the user row in place (132 chars) and answers the edited question (one-sentence reply as instructed); rename writes through to DB; stop aborts UI-side while server completes+saves; fast mode = no reasoning, quick reply; chips appear (3) and fill the input; suggest route returns [] cleanly for image-mode turns.
+- BUGS FOUND & FIXED during verification:
+  * PrismaClientValidationError "Unknown argument mode" — the long-running dev server had the PRE-db-push Prisma client cached in memory; persistence died mid-stream and `done` never fired. Fix: restart the dev server after schema changes (documented here as the rule).
+  * Test artifacts from stale agent-browser refs (refs renumber as the streaming DOM changes — re-snapshot before every click): two stray image-mode conversations sent themselves via mis-clicks; confirmed NOT a code bug (image mode intentionally skips the thinking phase), deleted all 19 test conversations + 15 file rows + upload/ai contents afterward.
+- eslint 0 errors, tsc clean, next build passes (18 routes, incl. /api/ai/suggest).
+- README: /api/ai entry now lists the full toolbox; games count fixed 1,600+ → 3,500+.
+
+Stage Summary:
+- Memphis AI gained Fast/Reasoning modes (visible streamed thinking via a two-phase call, since the endpoint has no native reasoning channel), plus the chat power tools: stop, regenerate, edit-and-resend, inline rename, and follow-up suggestion chips — all replay-safe server-side and verified end-to-end.
