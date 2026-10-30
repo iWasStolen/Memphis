@@ -80,27 +80,10 @@
   --surface-elev: #101010;
 }
 
-html[data-mode="graphite"] {
-  --background: #0a0a0a;
-  --card: #101010;
-  --popover: #121212;
-  --muted: #161616;
-  --border: #242424;
-  --accent: #1e1e1e;
-}
-
-html[data-accent="ash"] {
-  --primary: #e6e6e6;
-  --hi: 214;
-}
-html[data-accent="silver"] {
-  --primary: #cfcfcf;
-  --hi: 190;
-}
-html[data-accent="bone"] {
-  --primary: #f2efe9;
-  --hi: 240;
-}
+/* Mode + accent palettes are driven by the THEME ENGINE at the bottom
+   of this file (surface + accent variables re-pointing every literal
+   utility color). The old blocks that only touched --background /
+   --primary were invisible to the UI and have been removed. */
 
 html {
   font-size: calc(16px * var(--text-scale));
@@ -327,3 +310,178 @@ html[data-reducefx="1"] *::after {
 }
 .memphis-md code { font-family: var(--font-geist-mono), ui-monospace, monospace; }
 .memphis-md strong { color: #fff; font-weight: 600; }
+
+/* ============================================================
+   THEME ENGINE — makes Settings → Appearance actually recolor
+   the whole app.
+
+   The interface was built with literal Tailwind colors
+   (bg-black, bg-[#050505], text-white, border-[#141414] …),
+   so the old data-mode / data-accent blocks only changed CSS
+   variables that nothing consumed — Graphite and the accent
+   presets were invisible. Tailwind v4 emits every utility inside
+   @layer utilities; the UNLAYERED rules below therefore win the
+   cascade (no !important needed) and re-point each literal
+   palette slot at a theme variable. Settings flip the
+   variables; every surface follows instantly.
+   ============================================================ */
+
+:root {
+  /* surface scale — Pure Black (defaults identical to the literals) */
+  --s-page: #000000; /* page behind everything            (bg-black) */
+  --s-0: #050505;    /* modal shells, inputs              (#050505 #070707) */
+  --s-1: #0a0a0a;    /* inset panels, code blocks         (#080808 #0a0a0a) */
+  --s-2: #101010;    /* hover fill                        (#0d0d0d #0e0e0e #101010) */
+  --s-3: #141414;    /* dividers, chips                   (#111 #141414) */
+  --s-4: #161616;    /* active nav / selected             (#161616) */
+  --s-5: #1a1a1a;    /* elevated surfaces, panel borders  (#1a1a1a–#1f1f1f) */
+  --s-6: #222222;    /* strong fill                       (#222 #242424 #292929) */
+  --s-7: #262626;    /* input borders                     (#262626) */
+  --s-8: #2a2a2a;    /* hairline borders, scrollbars      (#2a2a2a) */
+  --s-9: #333333;    /* visible borders                   (#333) */
+  --s-10: #3a3a3a;   /* border hover                      (#3a3a3a #3d3d3d) */
+  --s-11: #555555;   /* bold hairlines, placeholders      (#555) */
+  --s-12: #444444;   /* border hover strong               (#444) */
+  /* accent scale — highlights, primary text, focus */
+  --a-hi: #ffffff;
+  --a-hi-hover: #e0e0e0;
+  --a-lo: #000000;
+}
+
+/* Graphite lifts every surface a couple of steps. */
+html[data-mode="graphite"] {
+  --s-page: #0a0a0a;
+  --s-0: #0e0e0e;
+  --s-1: #131313;
+  --s-2: #161616;
+  --s-3: #1b1b1b;
+  --s-4: #1f1f1f;
+  --s-5: #232323;
+  --s-6: #292929;
+  --s-7: #2e2e2e;
+  --s-8: #323232;
+  --s-9: #3a3a3a;
+  --s-10: #444444;
+  --s-11: #5c5c5c;
+  --s-12: #4c4c4c;
+  /* shadcn tokens follow the same lift */
+  --background: var(--s-page);
+  --card: var(--s-2);
+  --popover: var(--s-2);
+  --muted: var(--s-4);
+  --border: var(--s-6);
+  --accent: var(--s-5);
+  --surface-elev: var(--s-5);
+}
+
+/* Accent presets tint every highlight. */
+html[data-accent="ash"]    { --a-hi: #e6e6e6; --a-hi-hover: #cacaca; }
+html[data-accent="silver"] { --a-hi: #cfcfcf; --a-hi-hover: #b4b4b4; }
+html[data-accent="bone"]   { --a-hi: #f2efe9; --a-hi-hover: #d9d5cc; }
+
+/* shadcn primary/ring follow the accent too */
+:root {
+  --primary: var(--a-hi);
+  --primary-foreground: var(--a-lo);
+  --ring: color-mix(in srgb, var(--a-hi) 55%, transparent);
+  --sidebar-primary: var(--a-hi);
+  --sidebar-primary-foreground: var(--a-lo);
+}
+
+/* ---- backgrounds ------------------------------------------------ */
+.bg-black { background-color: var(--s-page); }
+.bg-black\/70 { background-color: color-mix(in srgb, var(--s-page) 70%, transparent); }
+.bg-black\/80 { background-color: color-mix(in srgb, var(--s-page) 80%, transparent); }
+.bg-black\/85 { background-color: color-mix(in srgb, var(--s-page) 85%, transparent); }
+
+.bg-\[\#050505\], .bg-\[\#070707\] { background-color: var(--s-0); }
+.bg-\[\#080808\], .bg-\[\#0a0a0a\] { background-color: var(--s-1); }
+.bg-\[\#0d0d0d\], .bg-\[\#0e0e0e\], .bg-\[\#101010\] { background-color: var(--s-2); }
+.bg-\[\#111\], .bg-\[\#141414\] { background-color: var(--s-3); }
+.bg-\[\#161616\] { background-color: var(--s-4); }
+.bg-\[\#1a1a1a\], .bg-\[\#1c1c1c\], .bg-\[\#1d1d1d\] { background-color: var(--s-5); }
+.bg-\[\#222\], .bg-\[\#242424\] { background-color: var(--s-6); }
+.bg-\[\#262626\] { background-color: var(--s-7); }
+.bg-\[\#2a2a2a\] { background-color: var(--s-8); }
+
+/* ---- hover / active / focus fills -------------------------------- */
+.hover\:bg-\[\#101010\]:hover,
+.hover\:bg-\[\#0d0d0d\]:hover,
+.hover\:bg-\[\#0a0a0a\]:hover { background-color: var(--s-2); }
+.hover\:bg-\[\#161616\]:hover { background-color: var(--s-4); }
+.hover\:bg-\[\#1c1c1c\]:hover,
+.hover\:bg-\[\#1d1d1d\]:hover { background-color: var(--s-5); }
+.hover\:bg-\[\#292929\]:hover { background-color: var(--s-6); }
+.active\:bg-\[\#1c1c1c\]:active { background-color: var(--s-5); }
+
+/* ---- borders ------------------------------------------------------ */
+.border-\[\#141414\] { border-color: var(--s-3); }
+.border-\[\#161616\] { border-color: var(--s-4); }
+.border-\[\#1a1a1a\],
+.border-\[\#1c1c1c\],
+.border-\[\#1d1d1d\],
+.border-\[\#1e1e1e\],
+.border-\[\#1f1f1f\] { border-color: var(--s-5); }
+.border-\[\#222\], .border-\[\#242424\] { border-color: var(--s-6); }
+.border-\[\#262626\] { border-color: var(--s-7); }
+.border-\[\#2a2a2a\] { border-color: var(--s-8); }
+.border-\[\#333\] { border-color: var(--s-9); }
+.border-\[\#3a3a3a\] { border-color: var(--s-10); }
+.border-\[\#555\] { border-color: var(--s-11); }
+
+.hover\:border-\[\#333\]:hover { border-color: var(--s-9); }
+.hover\:border-\[\#3a3a3a\]:hover,
+.hover\:border-\[\#3d3d3d\]:hover { border-color: var(--s-10); }
+.hover\:border-\[\#444\]:hover { border-color: var(--s-12); }
+.focus\:border-\[\#3a3a3a\]:focus { border-color: var(--s-10); }
+.focus\:border-\[\#555\]:focus { border-color: var(--s-11); }
+
+/* dividers */
+.divide-\[\#141414\] > :not(:last-child) { border-color: var(--s-3); }
+
+/* ---- accent-driven highlights ------------------------------------ */
+.text-white { color: var(--a-hi); }
+.hover\:text-white:hover { color: var(--a-hi); }
+.group-hover\:text-white:is(:where(.group):hover *) { color: var(--a-hi); }
+
+.bg-white { background-color: var(--a-hi); }
+.focus\:bg-white:focus { background-color: var(--a-hi); }
+.hover\:bg-\[\#e0e0e0\]:hover { background-color: var(--a-hi-hover); }
+
+.border-white { border-color: var(--a-hi); }
+.hover\:border-white:hover { border-color: var(--a-hi); }
+.border-white\/50 { border-color: color-mix(in srgb, var(--a-hi) 50%, transparent); }
+.border-white\/60 { border-color: color-mix(in srgb, var(--a-hi) 60%, transparent); }
+
+.fill-white { fill: var(--a-hi); }
+.ring-white\/20 { --tw-ring-color: color-mix(in srgb, var(--a-hi) 20%, transparent); }
+.ring-white\/30 { --tw-ring-color: color-mix(in srgb, var(--a-hi) 30%, transparent); }
+.focus\:ring-white\/20:focus { --tw-ring-color: color-mix(in srgb, var(--a-hi) 20%, transparent); }
+.outline-white\/60 { outline-color: color-mix(in srgb, var(--a-hi) 60%, transparent); }
+
+/* ---- placeholders / decorations ---------------------------------- */
+.placeholder\:text-\[\#555\]::placeholder { color: var(--s-11); }
+.decoration-\[\#555\] { text-decoration-color: var(--s-11); }
+
+/* ---- retarget the hand-written utilities -------------------------- */
+::selection { background: var(--a-hi); color: var(--a-lo); }
+:focus-visible { outline-color: color-mix(in srgb, var(--a-hi) 70%, transparent); }
+* { scrollbar-color: var(--s-8) transparent; }
+*::-webkit-scrollbar-thumb { background: var(--s-8); }
+*::-webkit-scrollbar-thumb:hover { background: var(--s-10); }
+.mono-label { color: #8f8f8f; }
+.hairline { border-color: var(--s-5); }
+.hr-faint { border-top-color: var(--s-3); }
+.u-link:hover { text-decoration-color: color-mix(in srgb, var(--a-hi) 70%, transparent); }
+.shimmer {
+  background: linear-gradient(90deg, var(--s-1) 25%, var(--s-4) 50%, var(--s-1) 75%);
+  background-size: 800px 100%;
+}
+.memphis-md h1, .memphis-md h2, .memphis-md h3, .memphis-md h4,
+.memphis-md strong { color: var(--a-hi); }
+.memphis-md th { background: var(--s-3); color: var(--a-hi); }
+.memphis-md th, .memphis-md td { border-color: var(--s-7); }
+.memphis-md tr:nth-child(even) td { background: var(--s-1); }
+.memphis-md hr { border-top-color: var(--s-6); }
+.memphis-md pre { background: var(--s-1); border-color: var(--s-5); }
+.memphis-md blockquote { border-left-color: var(--s-9); }

@@ -383,3 +383,25 @@ Stage Summary:
   * Re-verified all three scenarios live: plain key + typing → types normally (no navigation); plain key outside inputs → fires; Ctrl+Shift+P while focused in an input → fires. Meta+K capture + fire verified.
 - Cosmetic cleanup: removed an unused eslint-disable directive in settings-modal.tsx. (Clever cloak favicon 404s from this network — pre-existing external dependency; onError hides the img gracefully and the button still works.)
 - eslint 0 errors (warnings pre-existing), tsc clean, next build passes (19 routes).
+
+## Settings: Appearance theme engine — the real fix (2026-10-30, latest)
+
+- User report: "The Appearance settings still dont work" — CORRECT. The previous audit verified the CSS *variables* changed, but never checked whether anything visible consumed them.
+- ROOT CAUSE: the entire interface is built from literal Tailwind colors — text-white (125×), bg-[#050505] (40×), border-[#141414] (43×), hover:bg-[#101010] (36×), bg-white (32×), border-[#1f1f1f] (42×), etc. The data-mode / data-accent blocks only set --background / --primary / --hi — and grep proved --hi had ZERO consumers while token classes (bg-primary, bg-background) existed only in the generic shadcn ui/ folder. Net effect: Mode (Graphite) and every Accent preset changed variables that nothing rendered → zero visible change. Font / text-size / bg-pattern / reduce-effects worked only because they target html/body directly.
+- FIX — theme engine at the bottom of globals.css (one file, whole app):
+  * Defined a 15-slot surface scale (--s-page, --s-0…--s-12) + accent scale (--a-hi, --a-hi-hover, --a-lo) in :root, with Pure-Black defaults numerically IDENTICAL to the original literals (zero visual drift in default mode — verified: bg-black→rgb(0,0,0), bg-[#050505]→rgb(5,5,5), border-[#141414]→rgb(20,20,20), text-white→rgb(255,255,255)).
+  * html[data-mode="graphite"] lifts every slot ~2 steps (page #0a0a0a, modal #0e0e0e, dividers #1b1b1b, borders up to #444) and re-points the shadcn tokens (--background/--card/--popover/--muted/--border/--accent) at the same scale.
+  * html[data-accent="ash|silver|bone"] sets --a-hi/--a-hi-hover; :root derives --primary/--primary-foreground/--ring/--sidebar-primary from them, so shadcn components follow too.
+  * The key trick: Tailwind v4 emits all utilities inside @layer utilities, so UNLAYERED rules re-defining those exact utility classes win the cascade without !important. Overrode every literal palette class actually used in src/ — plain bg/text/border/divide/fill/ring/outline, hover:/active:/focus:/group-hover:/placeholder: variants, alpha blends (bg-black/70|80|85, border-white/50|60, ring-white/20|30) via color-mix — plus the hand-written utilities (::selection, :focus-visible, scrollbars, .hairline, .hr-faint, .u-link, .shimmer, .mono-label) and the Memphis AI markdown styles (.memphis-md th/td/pre/hr/blockquote/headings).
+  * Removed the old dead graphite/accent variable blocks (and the never-used --hi) to avoid dual sources of truth.
+- VERIFIED live (:81, agent-browser):
+  * Defaults unchanged: probed computed styles of every overridden class in Pure Black + White — all exactly the original hex values.
+  * Graphite: page rgb(10,10,10), modal rgb(14,14,14), dividers rgb(27,27,27), panel borders rgb(35,35,35), header backdrop color-mix over #0a0a0a.
+  * Accents: text-white/bg-white/border-white → #fff / #e6e6e6 (ash) / #cfcfcf (silver) / #f2efe9 (bone); real mouse-hover on nav shows rgb(255,255,255) vs rgb(207,207,207).
+  * Objective pixel proof (PIL average luminance): black 7.24 → graphite 13.19 (home view); settings open: default 10.11 → graphite+silver 14.45. Before the fix both diffs were 0.
+  * Stacking: graphite+silver+dots+serif+XL all apply simultaneously and persist across reload; theme holds across Home/AI/Play/Apps views; zero console/page errors.
+  * Reduced Motion etc. unaffected.
+- tsc clean, next build passes (19 routes). Reset button returns everything to Pure Black + White defaults.
+
+Stage Summary:
+- Appearance settings now genuinely restyle the app: Graphite visibly lifts every surface and the Ash/Silver/Bone accents tint every highlight, instantly and persistently — implemented as a single cascade-layer theme engine in globals.css that re-points the codebase's literal Tailwind palette at theme variables, with defaults pixel-identical to before.
